@@ -1,10 +1,8 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Gio = imports.gi.Gio;
-const Lang = imports.lang;
-const Signals = imports.signals;
 
-const PresenceIface = '\
+var PresenceIface = '\
 <node> \
     <interface name="org.gnome.SessionManager.Presence"> \
         <method name="SetStatus"> \
@@ -17,7 +15,7 @@ const PresenceIface = '\
     </interface> \
 </node>';
 
-const PresenceStatus = {
+var PresenceStatus = {
     AVAILABLE: 0,
     INVISIBLE: 1,
     BUSY: 2,
@@ -30,15 +28,18 @@ function Presence(initCallback, cancellable) {
                              '/org/gnome/SessionManager/Presence', initCallback, cancellable);
 }
 
-const InhibitorIface = ' \
+var InhibitorIface = ' \
 <node> \
     <interface name="org.gnome.SessionManager.Inhibitor"> \
-        <property name="app_id" type="s" access="read" /> \
-        <property name="client_id" type="s" access="read" /> \
-        <property name="reason" type="s" access="read" /> \
-        <property name="flags" type="u" access="read" /> \
-        <property name="toplevel_xid" type="u" access="read" /> \
-        <property name="cookie" type="u" access="read" /> \
+        <method name="GetFlags"> \
+            <arg name="flags" type="u" direction="out"/> \
+        </method> \
+        <method name="GetReason"> \
+            <arg name="reason" type="s" direction="out"/> \
+        </method> \
+        <method name="GetAppId"> \
+            <arg name="app_id" type="s" direction="out"/> \
+        </method> \
     </interface> \
 </node>';
 
@@ -47,7 +48,7 @@ function Inhibitor(objectPath, initCallback, cancellable) {
     return new InhibitorProxy(Gio.DBus.session, 'org.gnome.SessionManager', objectPath, initCallback, cancellable);
 }
 
-const SessionManagerIface = '\
+var SessionManagerIface = '\
 <node> \
     <interface name="org.gnome.SessionManager"> \
         <method name="Logout"> \
@@ -71,6 +72,15 @@ const SessionManagerIface = '\
            <arg type="u" name="flags" direction="in"/> \
            <arg type="b" name="is_inhibited" direction="out"/> \
        </method>   \
+       <method name="GetInhibitors"> \
+           <arg type="ao" name="inhibitors" direction="out"/> \
+       </method> \
+       <signal name="InhibitorAdded"> \
+           <arg type="o" name="id" direction="out"/> \
+       </signal> \
+       <signal name="InhibitorRemoved"> \
+           <arg type="o" name="id" direction="out"/> \
+       </signal> \
        <property name="InhibitedActions" type="u" access="read"/> \
     </interface> \
 </node>';

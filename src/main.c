@@ -24,7 +24,6 @@
 #include "cinnamon-global.h"
 #include "cinnamon-global-private.h"
 #include "cinnamon-perf-log.h"
-#include "cinnamon-js.h"
 #include "st.h"
 
 extern GType gnome_cinnamon_plugin_get_type (void);
@@ -51,11 +50,13 @@ cinnamon_dbus_acquire_name (GDBusProxy *bus,
                                                        &error)))
     {
       g_printerr ("failed to acquire %s: %s\n", name, error->message);
+      g_clear_error (&error);
       if (!fatal)
         return;
       exit (1);
     }
   g_variant_get (request_name_variant, "(u)", request_name_result);
+  g_variant_unref (request_name_variant);
 }
 
 static void
@@ -88,11 +89,13 @@ cinnamon_dbus_acquire_names (GDBusProxy *bus,
 }
 
 static void
-cinnamon_dbus_init (gboolean replace)
+cinnamon_dbus_init (gboolean  replace,
+                    gboolean *session_running)
 {
   GDBusConnection *session;
   GDBusProxy *bus;
   GError *error = NULL;
+  GVariant *session_result;
   guint32 request_name_flags;
   guint32 request_name_result;
 
@@ -100,6 +103,7 @@ cinnamon_dbus_init (gboolean replace)
 
   if (error) {
     g_printerr ("Failed to connect to session bus: %s", error->message);
+    g_error_free (error);
     exit (1);
   }
 
@@ -112,6 +116,11 @@ cinnamon_dbus_init (gboolean replace)
                                NULL, /* cancellable */
                                &error);
 
+  if (error) {
+    g_printerr ("Failed to create org.freedesktop.DBus proxy: %s", error->message);
+    g_error_free (error);
+    exit (1);
+  }
   request_name_flags = G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT;
   if (replace)
     request_name_flags |= DBUS_NAME_FLAG_REPLACE_EXISTING;
@@ -147,6 +156,47 @@ cinnamon_dbus_init (gboolean replace)
                            DBUS_NAME_FLAG_REPLACE_EXISTING,
                            &request_name_result,
                            "org.gnome.Caribou.Keyboard", FALSE);
+
+  /* At login, cinnamon.desktop requests that cinnamon-session start cinnamon
+   * during CSM_MANAGER_PHASE_WINDOW_MANAGER.  This call should return FALSE.
+   *
+   * By the time main.js gets around to setting up the startup animation,
+   * cinnamon-session is in running mode, and this would return TRUE, so this
+   * check has to be done before registering with cinnamon-session (which is its
+   * queue that it can continue to the remaining phases).
+   *
+   * When cinnamon is restarted during the session, this should always return
+   * TRUE.
+   *
+   * This gets passed to cinnamon-global, which main.js can access and help it
+   * to decide whether or not to run the startup animation.
+   *
+   * Timeout after 1 second - this shouldn't be allowed to hold up cinnamon's
+   * start-up.
+   */
+  session_result = g_dbus_connection_call_sync (session,
+                                                "org.gnome.SessionManager",
+                                                "/org/gnome/SessionManager",
+                                                "org.gnome.SessionManager",
+                                                "IsSessionRunning",
+                                                NULL,
+                                                G_VARIANT_TYPE ("(b)"),
+                                                G_DBUS_CALL_FLAGS_NONE,
+                                                1000,
+                                                NULL,
+                                                &error);
+
+  if (session_result)
+    {
+      g_variant_get (session_result, "(b)", session_running);
+      g_variant_unref (session_result);
+    }
+  else
+    {
+      *session_running = FALSE; // This will let the setting decide;
+      g_clear_error (&error);
+    }
+
   g_object_unref (bus);
   g_object_unref (session);
 }
@@ -205,7 +255,7 @@ cinnamon_perf_log_init (void)
                                    "i");
   cinnamon_perf_log_define_statistic (perf_log,
                                    "malloc.usedSize",
-                                   "Amount of malloc'ed memory currently in use",
+                                   "Amount of allocated memory currently in use",
                                    "i");
 
   cinnamon_perf_log_add_statistics_callback (perf_log,
@@ -248,7 +298,7 @@ center_pointer_on_screen ()
   Display *dpy;
   Window root_window;
   Screen *screen;
-  
+
   dpy = XOpenDisplay(0);
   root_window = XRootWindow(dpy, 0);
   XSelectInput(dpy, root_window, KeyReleaseMask);
@@ -263,6 +313,8 @@ main (int argc, char **argv)
   GOptionContext *ctx;
   GError *error = NULL;
   int ecode;
+  gboolean session_running;
+
   g_setenv ("CLUTTER_DISABLE_XINPUT", "1", TRUE);
   g_setenv ("CLUTTER_BACKEND", "x11", TRUE);
 
@@ -304,14 +356,12 @@ main (int argc, char **argv)
 
   center_pointer_on_screen();
 
-  cinnamon_dbus_init (meta_get_replace_current_wm ());
+  cinnamon_dbus_init (meta_get_replace_current_wm (),
+                      &session_running);
   cinnamon_a11y_init ();
   cinnamon_perf_log_init ();
 
   g_irepository_prepend_search_path (CINNAMON_PKGLIBDIR);
-#if HAVE_BLUETOOTH
-  g_irepository_prepend_search_path (BLUETOOTH_DIR);
-#endif
 
   /* Disable debug spew from various libraries */
   g_log_set_handler ("Cvc", G_LOG_LEVEL_DEBUG,
@@ -320,9 +370,11 @@ main (int argc, char **argv)
                      muted_log_handler, NULL);
   g_log_set_handler ("Bluetooth", G_LOG_LEVEL_DEBUG | G_LOG_LEVEL_MESSAGE,
                      muted_log_handler, NULL);
-
+  g_log_set_handler ("XApp", G_LOG_LEVEL_DEBUG,
+                     muted_log_handler, NULL);
   /* Initialize the global object */
-  _cinnamon_global_init (NULL);
+  _cinnamon_global_init ("session-running", session_running,
+                         NULL);
 
   g_unsetenv ("GDK_SCALE");
 

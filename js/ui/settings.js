@@ -12,7 +12,6 @@ const Cinnamon = imports.gi.Cinnamon;
 const Main = imports.ui.main;
 const Signals = imports.signals;
 const Extension = imports.ui.extension;
-const Mainloop = imports.mainloop;
 
 /**
  * ENUM:BindingDirection
@@ -31,7 +30,7 @@ const Mainloop = imports.mainloop;
  * Deprecated since 3.2: Binding direction is no longer meaningful. Please do not
  * use in new code.
  */
-const BindingDirection = {
+var BindingDirection = {
     IN : 1,
     OUT : 2,
     BIDIRECTIONAL : 3
@@ -144,7 +143,6 @@ var SETTINGS_TYPES = {
             "default",
             "min",
             "max",
-            "units",
             "step",
             "description"
         ]
@@ -170,6 +168,20 @@ var SETTINGS_TYPES = {
             "type",
             "default",
             "description"
+        ]
+    },
+    "timechooser" : {
+        "required-fields": [
+            "type",
+            "default",
+            "description"
+        ]
+    },
+    "list" : {
+        "required-fields": [
+            "type",
+            "default",
+            "columns"
         ]
     }
 };
@@ -206,15 +218,19 @@ function settings_not_initialized_error(uuid) {
 }
 
 function key_not_found_error (key_name, uuid) {
-    global.logError("Could not find setting key '" + key_name + "' for applet/desklet uuid " + uuid);
+    global.logError("Could not find setting key '" + key_name + "' for xlet " + uuid);
+}
+
+function invalidKeyValueError (key_name, uuid) {
+    global.logError(`Setting key ${key_name} for xlet ${uuid} is undefined or null`);
 }
 
 function invalid_setting_type_error (key_name, uuid, type) {
-    global.logError("Invalid setting type '" + type + "' for setting key '" + key_name + "' of applet/desklet uuid " + uuid);
+    global.logError("Invalid setting type '" + type + "' for setting key '" + key_name + "' of xlet " + uuid);
 }
 
 function options_not_supported_error(key_name, uuid, type) {
-    global.logError("Invalid request for key '" + key_name + "' of applet/desklet uuid '" + uuid + "': type '" + type + "' doesn't support options");
+    global.logError("Invalid request for key '" + key_name + "' of xlet '" + uuid + "': type '" + type + "' doesn't support options");
 }
 
 function binding_not_found_error(key_name, uuid) {
@@ -293,6 +309,10 @@ XletSettingsBase.prototype = {
             key_not_found_error(key, this.uuid);
             return false;
         }
+        if (this.settingsData[key] == null) {
+            invalidKeyValueError(key, this.uuid);
+            return false;
+        }
         if (!(this.settingsData[key].type in SETTINGS_TYPES)) {
             invalid_setting_type_error(key, this.uuid, this.settingsData[key].type);
             return false;
@@ -313,7 +333,8 @@ XletSettingsBase.prototype = {
         this.bindings[key].push(info);
 
         // add a save function for objects or arrays
-        if (typeof(this.settingsData[key].value) === "object" && !this.settingsData[key].value.save) {
+        if (this.settingsData[key].value != null
+            && typeof(this.settingsData[key].value) === "object" && !this.settingsData[key].value.save) {
             info.isObject = true;
             this.settingsData[key].value.save = Lang.bind(this, this._saveToFile);
         }
@@ -487,6 +508,23 @@ XletSettingsBase.prototype = {
     },
 
     /**
+     * getDefaultValue:
+     * @key (string): the name of the settings key
+     *
+     * Gets the default value of the setting @key.
+     *
+     * Returns: The default value of the setting
+     */
+    getDefaultValue: function(key) {
+        if (key in this.settingsData) {
+            return this.settingsData[key].default;
+        } else {
+            key_not_found_error(key, this.uuid);
+            return null;
+        }
+    },
+
+    /**
      * getOptions:
      * @key (String): the name of the settings key
      *
@@ -546,7 +584,10 @@ XletSettingsBase.prototype = {
 
         let changed = false;
         for (let key in this.settingsData) {
-            if (this.settingsData[key].value === undefined) continue;
+            if (!this.settingsData[key]
+                || this.settingsData[key].value === undefined
+                || !oldSettings[key]
+                || oldSettings[key].value === undefined) continue;
 
             let oldValue = oldSettings[key].value;
             let value = this.settingsData[key].value;
@@ -585,100 +626,169 @@ XletSettingsBase.prototype = {
         }
     },
 
+    _loadTemplate: function(checksum) {
+        let xletDir = Extension.getExtension(this.uuid).dir;
+        let templateFile = xletDir.get_child("settings-schema.json");
+        let overrideFile = xletDir.get_child("settings-override.json");
+        let overrideString, templateData;
+
+        if (!templateFile.query_exists(null)) {
+            throw "Unable to load template file for " + this.uuid + ": settings-schema.json could not be found";
+        }
+
+        let templateString = Cinnamon.get_file_contents_utf8_sync(templateFile.get_path());
+        let newChecksum = global.get_md5_for_string(templateString);
+
+        if (overrideFile.query_exists(null)) {
+            overrideString = Cinnamon.get_file_contents_utf8_sync(overrideFile.get_path());
+            newChecksum += global.get_md5_for_string(overrideString);
+        }
+
+        if (checksum && checksum == newChecksum) {
+            return [false, null];
+        }
+
+        try {
+            templateData = JSON.parse(templateString);
+        } catch(e) {
+            global.logError(e);
+            throw "Failed to parse template file for " + this.uuid;
+        }
+
+        try {
+            if (overrideString) {
+                let overrideData = JSON.parse(overrideString);
+
+                for (let key in overrideData) {
+                    if ("override-props" in overrideData[key]) {
+                        for (let prop in overrideData[key]) {
+                            if (prop == "override-props") continue;
+                            templateData[key][prop] = overrideData[key][prop];
+                        }
+                    }
+                    else {
+                        templateData[key] = overrideData[key];
+                    }
+                }
+            }
+        } catch(e) {
+            global.logError("Settings override for " + this.uuid + "failed. Skipping for now.");
+            global.logError(e);
+        }
+
+        templateData.__md5__ = newChecksum;
+
+        return [true, templateData];
+    },
+
     _ensureSettingsFiles: function() {
         let configPath = [GLib.get_home_dir(), ".cinnamon", "configs", this.uuid].join("/");
         let configDir = Gio.file_new_for_path(configPath);
         if (!configDir.query_exists(null)) configDir.make_directory_with_parents(null);
         this.file = configDir.get_child(this.instanceId + ".json");
-        let xletDir = this.ext_type.maps.dirs[this.uuid];
-        let templateFile = xletDir.get_child("settings-schema.json");
-        let needsSave = false;
+        this.monitor = this.file.monitor_file(Gio.FileMonitorFlags.NONE, null);
 
         // If the settings have already been installed previously we need to check if the schema
         // has changed and if so, do an upgrade
         if (this.file.query_exists(null)) {
-            this.settingsData = this._loadFromFile();
-            if (templateFile.query_exists(null)) {
-                let templateData = Cinnamon.get_file_contents_utf8_sync(templateFile.get_path());
-                let checksum = global.get_md5_for_string(templateData);
-
-                try {
-                    if (checksum != this.settingsData.__md5__) this._doUpgrade(templateData, checksum);
-                    needsSave = true;
-                } catch(e) {
-                    if (e) global.logError(e);
-                    global.logWarning("upgrade failed for " + this.uuid + ": falling back to previous settings");
-                }
+            try {
+                this.settingsData = this._loadFromFile();
+            } catch(e) {
+                // Some users with a little bit of know-how may be able to fix the file if it's not too corrupted. Is it worth it to give an option to skip this step?
+                global.logError(e);
+                global.logError("Failed to parse file "+this.file.get_path()+". Attempting to rebuild the settings file for "+this.uuid+".");
+                Main.notify("Unfortunately the settings file for "+this.uuid+" seems to be corrupted. Your settings have been reset to default.");
             }
-            // if settings-schema.json is missing, we can still load the settings from data, so we
-            // will merely skip the upgrade test
-            else global.logWarning("Couldn't find file settings-schema.json for " + this.uuid + ": skipping upgrade");
+        }
+
+        // if this.settingsData is populated, all we need to do is check for a newer version of the schema and upgrade if we find one
+        // if not, it means either that an installation has not yet occurred, or something when wrong
+        // either way, we need to install
+        if (this.settingsData) {
+            try {
+                let [needsUpgrade, templateData] = this._loadTemplate(this.settingsData.__md5__);
+
+                if (needsUpgrade) {
+                    this._doUpgrade(templateData);
+                    this._saveToFile();
+                }
+            } catch(e) {
+                if (e) global.logError(e);
+                global.logWarning("upgrade failed for " + this.uuid + ": falling back to previous settings");
+
+                // if settings-schema.json is missing or corrupt, we just use the old version for now,
+            }
         }
         else {
             // If the settings haven't already been installed, we need to do that now
-            if (!templateFile.query_exists(null)) {
-                global.logError("Unable to load settings for " + this.uuid + ": settings-schema.json could not be found");
-                return false;
-            }
-
-            let templateData = Cinnamon.get_file_contents_utf8_sync(templateFile.get_path());
-
             try {
-                if (!this._doInstall(templateData)) return false;
+                let [loaded, templateData] = this._loadTemplate();
+
+                this._doInstall(templateData);
             } catch(e) {
-                global.logError("Unable to install settings for " + this.uuid + ": there is a problem with settings-schema.json");
                 global.logError(e);
+                global.logError("Unable to install settings for " + this.uuid);
+
                 return false;
             }
 
-            needsSave = true;
+            this._saveToFile();
         }
 
-        this.monitor = this.file.monitor_file(Gio.FileMonitorFlags.NONE, null);
-        if (needsSave) this._saveToFile();
-        else this.monitorId = this.monitor.connect("changed", Lang.bind(this, this._checkSettings));
+        if (!this.monitorId) this.monitorId = this.monitor.connect("changed", Lang.bind(this, this._checkSettings));
 
         return true;
     },
 
     _doInstall: function(templateData) {
         global.log("Installing settings for " + this.uuid);
-        let checksum = global.get_md5_for_string(templateData);
-        this.settingsData = JSON.parse(templateData);
+
+        this.settingsData = templateData;
         for (let key in this.settingsData) {
+            if (key == "__md5__") continue;
+
             let props = this.settingsData[key];
-            if (!has_required_fields(props, key)) return false;
-            if (props.type in SETTINGS_TYPES)
+
+            // ignore anything that doesn't appear to be a valid settings type
+            if (!("type" in props) || !("default" in props)) continue;
+
+            if (!has_required_fields(props, key)) {
+                throw "invalid settings for " + this.uuid;
+            }
+
+            if ('default' in props) {
                 props.value = props.default;
+            }
         }
-        this.settingsData.__md5__ = checksum;
 
         global.log("Settings successfully installed for " + this.uuid);
-        return true;
     },
 
-    _doUpgrade: function(templateData, checksum) {
+    _doUpgrade: function(templateData) {
         global.log("Upgrading settings for " + this.uuid);
-        let newSettings = JSON.parse(templateData);
-        for (let key in newSettings) {
-            let props = newSettings[key];
 
-            // if (!has_required_fields(props, key)) throw null;
+        for (let key in templateData) {
+            if (key == "__md5__") continue;
 
-            if (!("type" in props) || !(props.type in SETTINGS_TYPES)) continue;
-            let type = SETTINGS_TYPES[props.type];
+            let props = templateData[key];
+
+            // ignore anything that doesn't appear to be a valid settings type
+            if (!("type" in props) || !("default" in props)) continue;
+
+            if (!has_required_fields(props, key)) {
+                throw "invalid settings for " + this.uuid;
+            }
 
             // If the setting already exists, we want to use the old value. If not we use the default.
             let oldValue = null;
-            if (this.settingsData[key] && this.settingsData[key].value !== undefined)
+            if (this.settingsData[key] && this.settingsData[key].value !== undefined) {
                 oldValue = this.settingsData[key].value;
-                if (key in this.settingsData && this._checkSanity(oldValue, newSettings[key])) newSettings[key].value = oldValue;
-            if (!newSettings[key].value) newSettings[key].value = newSettings[key].default;
+                if (key in this.settingsData && this._checkSanity(oldValue, templateData[key])) templateData[key].value = oldValue;
+            }
+            if (!("value" in templateData[key])) templateData[key].value = templateData[key].default;
         }
 
-        newSettings.__md5__ = checksum;
-
-        this.settingsData = newSettings;
+        this.settingsData = templateData;
         global.log("Settings successfully upgraded for " + this.uuid);
     },
 
@@ -710,6 +820,7 @@ XletSettingsBase.prototype = {
     _loadFromFile: function() {
         let rawData = Cinnamon.get_file_contents_utf8_sync(this.file.get_path());
         let json = JSON.parse(rawData);
+
         return json;
     },
 
@@ -766,12 +877,11 @@ AppletSettings.prototype = {
      * @instanceId (int): instance id of the applet
      */
     _init: function (xlet, uuid, instanceId) {
-        this.ext_type = Extension.Type.APPLET;
         XletSettingsBase.prototype._init.call(this, xlet, uuid, instanceId, "Applet");
     },
 
     _get_is_multi_instance_xlet: function(uuid) {
-        return Extension.get_max_instances(uuid, this.ext_type) != 1;
+        return Extension.get_max_instances(uuid) != 1;
     },
 };
 
@@ -795,12 +905,11 @@ DeskletSettings.prototype = {
      * @instanceId (int): instance id of the desklet
      */
     _init: function (xlet, uuid, instanceId) {
-        this.ext_type = Extension.Type.DESKLET;
         XletSettingsBase.prototype._init.call(this, xlet, uuid, instanceId, "Desklet");
     },
 
     _get_is_multi_instance_xlet: function(uuid) {
-        return Extension.get_max_instances(uuid, this.ext_type) > 1;
+        return Extension.get_max_instances(uuid) > 1;
     }
 };
 
@@ -823,7 +932,6 @@ ExtensionSettings.prototype = {
      * @uuid (string): uuid of the extension
      */
     _init: function (xlet, uuid) {
-        this.ext_type = Extension.Type.EXTENSION;
         XletSettingsBase.prototype._init.call(this, xlet, uuid, null, "Extension");
     },
 

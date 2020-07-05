@@ -1,16 +1,16 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
 import gi
-gi.require_version('CinnamonDesktop', '3.0')
 gi.require_version('UPowerGlib', '1.0')
-from gi.repository import CinnamonDesktop, Gdk, UPowerGlib
+from gi.repository import UPowerGlib
 
-from GSettingsWidgets import *
+from SettingsWidgets import SidePage
+from xapp.GSettingsWidgets import *
 
 POWER_BUTTON_OPTIONS = [
     ("blank", _("Lock the screen")),
     ("suspend", _("Suspend")),
-    ("shutdown", _("Shutdown immediately")),
+    ("shutdown", _("Shut down immediately")),
     ("hibernate", _("Hibernate")),
     ("interactive", _("Ask what to do")),
     ("nothing", _("Do nothing"))
@@ -40,10 +40,26 @@ SLEEP_DELAY_OPTIONS = [
     (1800, _("30 minutes")),
     (2700, _("45 minutes")),
     (3600, _("1 hour")),
+    (7200, _("2 hours")),
+    (10800, _("3 hours")),
     (0, _("Never"))
 ]
 
-(UP_ID, UP_VENDOR, UP_MODEL, UP_TYPE, UP_ICON, UP_PERCENTAGE, UP_STATE, UP_SECONDS) = range(8)
+(UP_ID, UP_VENDOR, UP_MODEL, UP_TYPE, UP_ICON, UP_PERCENTAGE, UP_STATE, UP_BATTERY_LEVEL, UP_SECONDS) = range(9)
+
+try:
+    UPowerGlib.DeviceLevel
+except AttributeError:
+    class DeviceLevel:
+        UNKNOWN = 1
+        NONE = 1
+        LOW = 3
+        CRITICAL = 4
+        NORMAL = 6
+        HIGH = 7
+        FULL = 9
+    UPowerGlib.DeviceLevel = DeviceLevel
+
 
 def get_timestring(time_seconds):
     minutes = int((time_seconds / 60.0) + 0.5)
@@ -83,6 +99,7 @@ def get_timestring(time_seconds):
 
 
 CSD_SCHEMA = "org.cinnamon.settings-daemon.plugins.power"
+CSM_SCHEMA = "org.cinnamon.SessionManager"
 
 class Module:
     name = "power"
@@ -97,18 +114,18 @@ class Module:
         if self.loaded:
             # self.loaded = False
             return
-        print "Loading Power module"
+        print("Loading Power module")
 
         self.up_client = UPowerGlib.Client.new()
 
         self.csd_power_proxy = Gio.DBusProxy.new_sync(
-                Gio.bus_get_sync(Gio.BusType.SESSION, None),
-                Gio.DBusProxyFlags.NONE,
-                None,
-                "org.cinnamon.SettingsDaemon",
-                "/org/cinnamon/SettingsDaemon/Power",
-                "org.cinnamon.SettingsDaemon.Power",
-                None)
+            Gio.bus_get_sync(Gio.BusType.SESSION, None),
+            Gio.DBusProxyFlags.NONE,
+            None,
+            "org.cinnamon.SettingsDaemon.Power",
+            "/org/cinnamon/SettingsDaemon/Power",
+            "org.cinnamon.SettingsDaemon.Power",
+            None)
 
         self.settings = Gio.Settings.new("org.cinnamon")
 
@@ -125,7 +142,7 @@ class Module:
 
         section = power_page.add_section(_("Power Options"))
 
-        lid_options, button_power_options, critical_options = get_available_options(self.up_client)
+        lid_options, button_power_options, critical_options, can_suspend, can_hybrid_sleep = get_available_options(self.up_client)
 
         size_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
@@ -150,9 +167,9 @@ class Module:
                 section.add_row(GSettings2ComboBox(_("When the lid is closed"), CSD_SCHEMA, "lid-close-ac-action", "lid-close-battery-action", lid_options, size_group=size_group))
 
         else:
-            section.add_row(GSettingsComboBox(_("Turn off the screen when inactive for"), CSD_SCHEMA, "sleep-display-ac", SLEEP_DELAY_OPTIONS, valtype="int", size_group=size_group))
+            section.add_row(GSettingsComboBox(_("Turn off the screen when inactive for"), CSD_SCHEMA, "sleep-display-ac", SLEEP_DELAY_OPTIONS, valtype=int, size_group=size_group))
 
-            section.add_row(GSettingsComboBox(_("Suspend when inactive for"), CSD_SCHEMA, "sleep-inactive-ac-timeout", SLEEP_DELAY_OPTIONS, valtype="int", size_group=size_group))
+            section.add_row(GSettingsComboBox(_("Suspend when inactive for"), CSD_SCHEMA, "sleep-inactive-ac-timeout", SLEEP_DELAY_OPTIONS, valtype=int, size_group=size_group))
 
             if self.has_lid:
                 section.add_row(GSettingsComboBox(_("When the lid is closed"), CSD_SCHEMA, "lid-close-ac-action", lid_options, size_group=size_group))
@@ -166,8 +183,13 @@ class Module:
         if self.has_lid:
             section.add_row(GSettingsSwitch(_("Perform lid-closed action even with external monitors attached"), CSD_SCHEMA, "lid-close-suspend-with-external-monitor"))
 
-        if self.has_battery and UPowerGlib.MAJOR_VERSION == 0 and UPowerGlib.MINOR_VERSION < 99:
+        if self.has_battery and UPowerGlib.MAJOR_VERSION == 0 and UPowerGlib.MINOR_VERSION <= 99:
             section.add_row(GSettingsComboBox(_("When the battery is critically low"), CSD_SCHEMA, "critical-battery-action", critical_options, size_group=size_group))
+
+        if can_suspend and can_hybrid_sleep:
+            switch = GSettingsSwitch(_("Enable Hybrid Sleep"), CSM_SCHEMA, "prefer-hybrid-sleep")
+            switch.set_tooltip_text(_("Replaces Suspend with Hybrid Sleep"))
+            section.add_row(switch)
 
         # Batteries
 
@@ -178,44 +200,20 @@ class Module:
         self.build_battery_page()
         self.csd_power_proxy.connect("g-properties-changed", self.build_battery_page)
 
-        primary_output = None
-        try:
-            screen = CinnamonDesktop.RRScreen.new(Gdk.Screen.get_default())
-            outputs = CinnamonDesktop.RRScreen.list_outputs(screen)
-            for output in outputs:
-                if (output.is_connected() and output.is_laptop()):
-                    try:
-                        # Try to get the backlight info, if it fails just move on (we used to rely on output.get_backlight_min() and output.get_backlight_max() but these aren't reliable)
-                        output.get_backlight()
-                        primary_output = output
-                        break
-                    except:
-                        pass
-        except Exception, detail:
-            print "Failed to query backlight information in cs_power module: %s" % detail
-
-        if primary_output is None:
-            if self.show_battery_page:
-                self.sidePage.add_widget(self.sidePage.stack)
-                self.sidePage.stack.add_titled(power_page, "power", _("Power"))
-                self.sidePage.stack.add_titled(self.battery_page, "batteries", _("Batteries"))
-            else:
-
-                self.sidePage.add_widget(power_page)
-            return
-
         proxy = Gio.DBusProxy.new_sync(
-                Gio.bus_get_sync(Gio.BusType.SESSION, None),
-                Gio.DBusProxyFlags.NONE,
-                None,
-                "org.cinnamon.SettingsDaemon",
-                "/org/cinnamon/SettingsDaemon/Power",
-                "org.cinnamon.SettingsDaemon.Power.Screen",
-                None)
+            Gio.bus_get_sync(Gio.BusType.SESSION, None),
+            Gio.DBusProxyFlags.NONE,
+            None,
+            "org.cinnamon.SettingsDaemon.Power",
+            "/org/cinnamon/SettingsDaemon/Power",
+            "org.cinnamon.SettingsDaemon.Power.Screen",
+            None)
 
         try:
             brightness = proxy.GetPercentage()
-        except:
+        except GLib.Error as e:
+            print("Power module brightness page not available: %s" % e.message)
+
             if self.show_battery_page:
                 self.sidePage.add_widget(self.sidePage.stack)
                 self.sidePage.stack.add_titled(power_page, "power", _("Power"))
@@ -234,13 +232,29 @@ class Module:
             size_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
             section = page.add_section(_("Screen brightness"))
-            section.add_row(BrightnessSlider(section, proxy))
+            section.add_row(BrightnessSlider(section, proxy, _("Screen brightness")))
 
             section.add_row(GSettingsSwitch(_("On battery, dim screen when inactive"), CSD_SCHEMA, "idle-dim-battery"))
 
-            section.add_reveal_row(GSettingsComboBox(_("Brightness level when inactive"), CSD_SCHEMA, "idle-brightness", IDLE_BRIGHTNESS_OPTIONS, valtype="int", size_group=size_group), CSD_SCHEMA, "idle-dim-battery")
+            section.add_reveal_row(GSettingsComboBox(_("Brightness level when inactive"), CSD_SCHEMA, "idle-brightness", IDLE_BRIGHTNESS_OPTIONS, valtype=int, size_group=size_group), CSD_SCHEMA, "idle-dim-battery")
 
-            section.add_reveal_row(GSettingsComboBox(_("Dim screen after inactive for"), CSD_SCHEMA, "idle-dim-time", IDLE_DELAY_OPTIONS, valtype="int", size_group=size_group), CSD_SCHEMA, "idle-dim-battery")
+            section.add_reveal_row(GSettingsComboBox(_("Dim screen after inactive for"), CSD_SCHEMA, "idle-dim-time", IDLE_DELAY_OPTIONS, valtype=int, size_group=size_group), CSD_SCHEMA, "idle-dim-battery")
+
+            proxy = Gio.DBusProxy.new_sync(Gio.bus_get_sync(Gio.BusType.SESSION, None),
+                                           Gio.DBusProxyFlags.NONE,
+                                           None,
+                                           "org.cinnamon.SettingsDaemon.Power",
+                                           "/org/cinnamon/SettingsDaemon/Power",
+                                           "org.cinnamon.SettingsDaemon.Power.Keyboard",
+                                           None)
+
+            try:
+                brightness = proxy.GetPercentage()
+            except GLib.Error as e:
+                print("Power module no keyboard backlight: %s" % e.message)
+            else:
+                section = page.add_section(_("Keyboard backlight"))
+                section.add_row(BrightnessSlider(section, proxy, _("Backlight brightness")))
 
     def build_battery_page(self, *args):
 
@@ -311,6 +325,7 @@ class Module:
     def set_device_ups_primary(self, device):
         device_id = device[UP_ID]
         percentage = device[UP_PERCENTAGE]
+        battery_level = device[UP_BATTERY_LEVEL]
         state = device[UP_STATE]
         time = device[UP_SECONDS]
         vendor = device[UP_VENDOR]
@@ -340,12 +355,13 @@ class Module:
         if (model != "" or vendor != ""):
             desc = "%s %s" % (vendor, model)
 
-        widget = self.create_battery_row(device_id, "battery", desc, percentage, details)
+        widget = self.create_battery_row(device_id, "battery", desc, percentage, battery_level, details)
         return widget
 
     def set_device_battery_primary(self, device):
         device_id = device[UP_ID]
         percentage = device[UP_PERCENTAGE]
+        battery_level = device[UP_BATTERY_LEVEL]
         state = device[UP_STATE]
         time = device[UP_SECONDS]
         vendor = device[UP_VENDOR]
@@ -380,7 +396,7 @@ class Module:
         if (model != "" or vendor != ""):
             desc = "%s %s" % (vendor, model)
 
-        widget = self.create_battery_row(device_id, "battery", desc, percentage, details)
+        widget = self.create_battery_row(device_id, "battery", desc, percentage, battery_level, details)
         return widget
 
     def set_device_battery_additional(self, device):
@@ -411,6 +427,7 @@ class Module:
         device_id = device[UP_ID]
         kind = device[UP_TYPE]
         percentage = device[UP_PERCENTAGE]
+        battery_level = device[UP_BATTERY_LEVEL]
         vendor = device[UP_VENDOR]
         model = device[UP_MODEL]
 
@@ -445,10 +462,10 @@ class Module:
         if (model != "" or vendor != ""):
             desc = "%s %s" % (vendor, model)
 
-        widget = self.create_battery_row(device_id, icon_name, desc, percentage)
+        widget = self.create_battery_row(device_id, icon_name, desc, percentage, battery_level)
         return widget
 
-    def create_battery_row(self, device_id, icon_name, desc, percentage, details=None):
+    def create_battery_row(self, device_id, icon_name, desc, percentage, battery_level, details=None):
 
         if device_id in self.aliases:
             desc = self.aliases[device_id]
@@ -467,33 +484,69 @@ class Module:
         label_box.pack_start(entry, False, False, 0)
         self.battery_label_size_group.add_widget(label_box)
         hbox.pack_start(label_box, False, False, 0)
-        label = Gtk.Label()
-        label.set_markup("%d%%" % int(percentage))
-        label.set_size_request(30, -1)
-        hbox.pack_start(label, False, False, 15)
 
-        level_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        level_bar = Gtk.LevelBar()
-        level_bar.set_mode(Gtk.LevelBarMode.DISCRETE)
-        level_bar.set_min_value(0)
-        level_bar.set_max_value(10)
-        level_bar.add_offset_value("high", 5)
-        level_bar.add_offset_value("low", 2)
-        level_box.set_valign(Gtk.Align.CENTER)
-        level_bar.set_value(round(percentage / 10))
-        level_box.pack_start(level_bar, True, True, 0)
-        hbox.pack_start(level_box, True, True, 0)
+        if battery_level == UPowerGlib.DeviceLevel.NONE:
+            label = Gtk.Label()
+            label.set_markup("%d%%" % int(percentage))
+            label.set_size_request(30, -1)
+            hbox.pack_start(label, False, False, 15)
+
+            level_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            level_bar = Gtk.LevelBar()
+            level_bar.set_mode(Gtk.LevelBarMode.DISCRETE)
+            level_bar.set_min_value(0)
+            level_bar.set_max_value(10)
+            level_bar.add_offset_value("high", 5)
+            level_bar.add_offset_value("low", 2)
+            level_box.set_valign(Gtk.Align.CENTER)
+            level_bar.set_value(round(percentage / 10))
+            level_box.pack_start(level_bar, True, True, 0)
+            hbox.pack_start(level_box, True, True, 0)
+        else:
+            status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            status_icon = Gtk.Image.new_from_icon_name(self.bat_level_to_icon(battery_level), Gtk.IconSize.BUTTON)
+            status_icon.set_size_request(30, -1)
+
+            status_box.pack_start(status_icon, False, False, 15)
+
+            status_label = Gtk.Label(self.bat_level_to_label(battery_level))
+            status_box.pack_end(status_label, False, False, 0)
+            hbox.pack_start(status_box, True, True, 0)
+
         vbox.pack_start(hbox, False, False, 0)
 
         if details:
             label = Gtk.Label()
             label.set_markup(details)
             label.get_style_context().add_class("dim-label")
+            label.set_halign(Gtk.Align.END)
             vbox.pack_end(label, False, False, 0)
 
         widget.pack_start(vbox, True, True, 0)
 
         return widget
+
+    def bat_level_to_icon(self, level):
+        if level in (UPowerGlib.DeviceLevel.FULL, UPowerGlib.DeviceLevel.HIGH):
+            return "battery-full-symbolic"
+        elif level == UPowerGlib.DeviceLevel.NORMAL:
+            return "battery-good-symbolic"
+        elif level == UPowerGlib.DeviceLevel.LOW:
+            return "battery-low-symbolic"
+        elif level == UPowerGlib.DeviceLevel.CRITICAL:
+            return "battery-caution-symbolic"
+
+    def bat_level_to_label(self, level):
+        if level == UPowerGlib.DeviceLevel.FULL:
+            return _("Battery full")
+        elif level == UPowerGlib.DeviceLevel.HIGH:
+            return _("Battery almost full")
+        elif level == UPowerGlib.DeviceLevel.NORMAL:
+            return _("Battery good")
+        elif level == UPowerGlib.DeviceLevel.LOW:
+            return _("Low battery")
+        elif level == UPowerGlib.DeviceLevel.CRITICAL:
+            return _("Critically low battery")
 
     def on_alias_changed(self, entry, event, device_id):
         self.aliases[device_id] = entry.get_text()
@@ -506,27 +559,41 @@ class Module:
 def get_available_options(up_client):
     can_suspend = False
     can_hibernate = False
+    can_hybrid_sleep = False
 
+    # Try logind first
     try:
         connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         proxy = Gio.DBusProxy.new_sync(
-                connection,
-                Gio.DBusProxyFlags.NONE,
-                None,
-                "org.freedesktop.login1",
-                "/org/freedesktop/login1",
-                "org.freedesktop.login1.Manager",
-                None)
+            connection,
+            Gio.DBusProxyFlags.NONE,
+            None,
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager",
+            None)
 
         can_suspend = proxy.CanSuspend() == "yes"
         can_hibernate = proxy.CanHibernate() == "yes"
+        can_hybrid_sleep = proxy.CanHybridSleep() == "yes"
     except:
         pass
 
-    # New versions of upower does not have get_can_suspend function
+    # Next try ConsoleKit
     try:
-        can_suspend = can_suspend or up_client.get_can_suspend()
-        can_hibernate = can_hibernate or up_client.get_can_hibernate()
+        connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        proxy = Gio.DBusProxy.new_sync(
+            connection,
+            Gio.DBusProxyFlags.NONE,
+            None,
+            "org.freedesktop.ConsoleKit",
+            "/org/freedesktop/ConsoleKit/Manager",
+            "org.freedesktop.ConsoleKit.Manager",
+            None)
+
+        can_suspend = can_suspend or (proxy.CanSuspend() == "yes")
+        can_hibernate = can_hibernate or (proxy.CanHybridSleep() == "yes")
+        can_hybrid_sleep = can_hybrid_sleep or (proxy.CanHybridSleep() == "yes")
     except:
         pass
 
@@ -538,20 +605,23 @@ def get_available_options(up_client):
 
     lid_options = [
         ("suspend", _("Suspend")),
+        ("shutdown", _("Shut down immediately")),
         ("hibernate", _("Hibernate")),
+        ("blank", _("Lock Screen")),
         ("nothing", _("Do nothing"))
     ]
 
     button_power_options = [
         ("blank", _("Lock Screen")),
         ("suspend", _("Suspend")),
-        ("shutdown", _("Shutdown immediately")),
+        ("shutdown", _("Shut down immediately")),
         ("hibernate", _("Hibernate")),
         ("interactive", _("Ask")),
         ("nothing", _("Do nothing"))
     ]
 
     critical_options = [
+        ("shutdown", _("Shut down immediately")),
         ("hibernate", _("Hibernate")),
         ("nothing", _("Do nothing"))
     ]
@@ -564,12 +634,12 @@ def get_available_options(up_client):
         for options in lid_options, button_power_options, critical_options:
             remove(options, "hibernate")
 
-    return lid_options, button_power_options, critical_options
+    return lid_options, button_power_options, critical_options, can_suspend, can_hybrid_sleep
 
 class BrightnessSlider(SettingsWidget):
     step = 5
 
-    def __init__(self, section, proxy):
+    def __init__(self, section, proxy, label):
         super(BrightnessSlider, self).__init__()
         self.set_orientation(Gtk.Orientation.VERTICAL)
         self.set_spacing(0)
@@ -580,7 +650,7 @@ class BrightnessSlider(SettingsWidget):
 
         hbox = Gtk.Box()
 
-        self.label = Gtk.Label.new(_("Screen brightness"))
+        self.label = Gtk.Label.new(label)
         self.label.set_halign(Gtk.Align.CENTER)
 
         self.min_label= Gtk.Label()
@@ -592,8 +662,26 @@ class BrightnessSlider(SettingsWidget):
         self.min_label.set_markup("<i><small>0%</small></i>")
         self.max_label.set_markup("<i><small>100%</small></i>")
 
-        self.content_widget = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 100, 5)
+        step = 5
+
+        try:
+            # Keyboard backlight
+            step = proxy.GetStep()
+            self.content_widget = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, step)
+            val = 0
+
+            while val < 100 - step:
+                val += step
+
+                self.content_widget.add_mark(val, Gtk.PositionType.BOTTOM, None)
+
+        except GLib.Error:
+            self.content_widget = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 100, step)
+
+        self.step = step
+
         self.content_widget.set_draw_value(False)
+        self.content_widget.set_digits(0)
 
         hbox.pack_start(self.min_label, False, False, 0)
         hbox.pack_start(self.content_widget, True, True, 0)
@@ -602,11 +690,13 @@ class BrightnessSlider(SettingsWidget):
         self.pack_start(self.label, False, False, 0)
         self.pack_start(hbox, True, True, 6)
 
-        self.on_dbus_changed()
-
         self.proxy.connect("g-signal", self.on_dbus_changed)
         self.content_widget.connect("scroll-event", self.on_scroll_event)
-        self.content_widget.connect("value-changed", self.apply_later)
+        self.content_widget.connect("change-value", self.on_change_value)
+
+        self.value_changed_id = self.content_widget.connect("value-changed", self.apply_later)
+
+        self.on_dbus_changed()
 
     def apply_later(self, *args):
         def apply(self):
@@ -617,18 +707,49 @@ class BrightnessSlider(SettingsWidget):
             GLib.source_remove(self.timer)
         self.timer = GLib.timeout_add(300, apply, self)
 
+    def on_change_value(self, range, scroll_type, value, data=None):
+        # Keyboard backlights can have very few adjustment steps (for instance,
+        # 0, 50% and 100% in the case of a lenovo p51 laptop.)  It's desirable
+        # to have the adjustment ratchet to these values, otherwise you can
+        # have the slider misrepresenting the actual value.
+        #
+        # This intermediate step (change-value signal) lets us clamp the new
+        # value to an actual valid position before sending it to the proxy.
+        i = 0
+        v = round(value)
+        step = self.step
+
+        while i < 100:
+            if v > i + step:
+                i += step
+                continue
+
+            if ((i + step) - v) < (v - i):
+                v = i + step
+            else:
+                v = i
+
+            break
+
+        self.content_widget.set_value(v)
+
+        return True
+
     def on_scroll_event(self, widget, event):
         found, delta_x, delta_y = event.get_scroll_deltas()
 
         # If you scroll up, delta_y < 0. This is a weird world
-        widget.set_value(widget.get_value() - delta_y * self.step)
+        self.content_widget.set_value(widget.get_value() - delta_y * self.step)
 
         return True
 
     def on_dbus_changed(self, *args):
         try:
             brightness = self.proxy.GetPercentage()
+
+            self.content_widget.handler_block(self.value_changed_id)
             self.content_widget.set_value(brightness)
+            self.content_widget.handler_unblock(self.value_changed_id)
         except:
             self.section.hide()
 

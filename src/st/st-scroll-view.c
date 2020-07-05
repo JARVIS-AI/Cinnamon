@@ -69,14 +69,6 @@ static void clutter_container_iface_init (ClutterContainerIface *iface);
 
 static ClutterContainerIface *st_scroll_view_parent_iface = NULL;
 
-G_DEFINE_TYPE_WITH_CODE (StScrollView, st_scroll_view, ST_TYPE_BIN,
-                         G_IMPLEMENT_INTERFACE (CLUTTER_TYPE_CONTAINER,
-                                                clutter_container_iface_init))
-
-#define SCROLL_VIEW_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), \
-                                                             ST_TYPE_SCROLL_VIEW, \
-                                                             StScrollViewPrivate))
-
 #define AUTO_SCROLL_POLL_INTERVAL 15
 
 #define AUTO_SCROLL_TOTAL_REGION 100
@@ -114,14 +106,19 @@ struct _StScrollViewPrivate
 
   StScrollViewFade *vfade_effect;
 
-  gboolean      row_size_set : 1;
-  gboolean      column_size_set : 1;
+  guint         row_size_set : 1;
+  guint         column_size_set : 1;
   guint         mouse_scroll : 1;
   guint         hscrollbar_visible : 1;
   guint         vscrollbar_visible : 1;
-  gboolean      auto_scroll : 1;
+  guint         auto_scroll : 1;
   guint         auto_scroll_timeout_id;
 };
+
+G_DEFINE_TYPE_WITH_CODE (StScrollView, st_scroll_view, ST_TYPE_BIN,
+                         G_ADD_PRIVATE (StScrollView)
+                         G_IMPLEMENT_INTERFACE (CLUTTER_TYPE_CONTAINER,
+                                                clutter_container_iface_init))
 
 enum {
   PROP_0,
@@ -169,6 +166,7 @@ st_scroll_view_get_property (GObject    *object,
       break;
     case PROP_AUTO_SCROLL:
       g_value_set_boolean (value, priv->auto_scroll);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
     }
@@ -257,6 +255,8 @@ calculate_and_scroll (ClutterActor  *self,
                     "value", &vvalue,
                     NULL);
     st_adjustment_set_value (priv->vadjustment, vvalue + delta);
+
+    clutter_actor_queue_redraw (self);
 }
 
 static void
@@ -365,6 +365,7 @@ st_scroll_view_set_property (GObject      *object,
     case PROP_AUTO_SCROLL:
       st_scroll_view_set_auto_scrolling (self,
                                          g_value_get_boolean (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
     }
@@ -411,6 +412,8 @@ st_scroll_view_dispose (GObject *object)
     priv->setting_connect_id = 0;
   }
 
+  g_clear_object (&priv->settings);
+
   g_signal_handlers_disconnect_by_func (ST_SCROLL_VIEW (object), motion_event_cb, ST_SCROLL_VIEW (object));
 
   G_OBJECT_CLASS (st_scroll_view_parent_class)->dispose (object);
@@ -454,7 +457,7 @@ get_scrollbar_width (StScrollView *scroll,
 {
   StScrollViewPrivate *priv = scroll->priv;
 
-  if (CLUTTER_ACTOR_IS_VISIBLE (priv->vscroll))
+  if (clutter_actor_is_visible (priv->vscroll))
     {
       gfloat min_size;
 
@@ -472,7 +475,7 @@ get_scrollbar_height (StScrollView *scroll,
 {
   StScrollViewPrivate *priv = scroll->priv;
 
-  if (CLUTTER_ACTOR_IS_VISIBLE (priv->hscroll))
+  if (clutter_actor_is_visible (priv->hscroll))
     {
       gfloat min_size;
 
@@ -492,13 +495,14 @@ st_scroll_view_get_preferred_width (ClutterActor *actor,
                                     gfloat       *natural_width_p)
 {
   StScrollViewPrivate *priv = ST_SCROLL_VIEW (actor)->priv;
-  StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
+  StThemeNode *theme_node;
   gfloat min_width = 0, natural_width;
   gfloat child_min_width, child_natural_width;
 
   if (!priv->child)
     return;
 
+  theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
   st_theme_node_adjust_for_height (theme_node, &for_height);
 
   clutter_actor_get_preferred_width (priv->child, -1,
@@ -513,9 +517,13 @@ st_scroll_view_get_preferred_width (ClutterActor *actor,
       break;
     case GTK_POLICY_ALWAYS:
     case GTK_POLICY_AUTOMATIC:
+    case GTK_POLICY_EXTERNAL:
       /* Should theoretically use the min width of the hscrollbar,
        * but that's not cleanly defined at the moment */
       min_width = 0;
+      break;
+    default:
+      g_warn_if_reached();
       break;
     }
 
@@ -543,7 +551,7 @@ st_scroll_view_get_preferred_height (ClutterActor *actor,
                                      gfloat       *natural_height_p)
 {
   StScrollViewPrivate *priv = ST_SCROLL_VIEW (actor)->priv;
-  StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
+  StThemeNode *theme_node = NULL;
   gboolean account_for_hscrollbar = FALSE;
   gfloat min_height = 0, natural_height;
   gfloat child_min_height, child_natural_height;
@@ -552,6 +560,8 @@ st_scroll_view_get_preferred_height (ClutterActor *actor,
 
   if (!priv->child)
     return;
+
+  theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
 
   st_theme_node_adjust_for_width (theme_node, &for_width);
 
@@ -566,17 +576,22 @@ st_scroll_view_get_preferred_height (ClutterActor *actor,
   switch (priv->vscrollbar_policy)
     {
     case GTK_POLICY_NEVER:
+    case GTK_POLICY_EXTERNAL:
       break;
     case GTK_POLICY_ALWAYS:
     case GTK_POLICY_AUTOMATIC:
       /* We've requested space for the scrollbar, subtract it back out */
       for_width -= sb_width;
       break;
+    default:
+      g_warn_if_reached();
+      break;
     }
 
   switch (priv->hscrollbar_policy)
     {
     case GTK_POLICY_NEVER:
+    case GTK_POLICY_EXTERNAL:
       account_for_hscrollbar = FALSE;
       break;
     case GTK_POLICY_ALWAYS:
@@ -584,6 +599,9 @@ st_scroll_view_get_preferred_height (ClutterActor *actor,
       break;
     case GTK_POLICY_AUTOMATIC:
       account_for_hscrollbar = for_width < child_min_width;
+      break;
+    default:
+      g_warn_if_reached();
       break;
     }
 
@@ -599,9 +617,13 @@ st_scroll_view_get_preferred_height (ClutterActor *actor,
       break;
     case GTK_POLICY_ALWAYS:
     case GTK_POLICY_AUTOMATIC:
+    case GTK_POLICY_EXTERNAL:
       /* Should theoretically use the min height of the vscrollbar,
        * but that's not cleanly defined at the moment */
       min_height = 0;
+      break;
+    default:
+      g_warn_if_reached();
       break;
     }
 
@@ -717,7 +739,7 @@ st_scroll_view_allocate (ClutterActor          *actor,
    */
 
   /* Vertical scrollbar */
-  if (CLUTTER_ACTOR_IS_VISIBLE (priv->vscroll))
+  if (clutter_actor_is_visible (priv->vscroll))
     {
       if (st_widget_get_direction (ST_WIDGET (actor)) == ST_TEXT_DIRECTION_RTL)
         {
@@ -736,7 +758,7 @@ st_scroll_view_allocate (ClutterActor          *actor,
     }
 
   /* Horizontal scrollbar */
-  if (CLUTTER_ACTOR_IS_VISIBLE (priv->hscroll))
+  if (clutter_actor_is_visible (priv->hscroll))
     {
       if (st_widget_get_direction (ST_WIDGET (actor)) == ST_TEXT_DIRECTION_RTL)
         {
@@ -865,6 +887,9 @@ st_scroll_view_scroll_event (ClutterActor       *self,
                     "value", &value,
                     NULL);
       break;
+    default:
+      g_warn_if_reached();
+      break;
     }
 
   switch (event->direction)
@@ -885,7 +910,12 @@ st_scroll_view_scroll_event (ClutterActor       *self,
     case CLUTTER_SCROLL_RIGHT:
       st_adjustment_set_value (priv->hadjustment, value + step);
       break;
+    default:
+      g_warn_if_reached();
+      break;
     }
+
+  clutter_actor_queue_redraw (self);
 
   return TRUE;
 }
@@ -897,8 +927,6 @@ st_scroll_view_class_init (StScrollViewClass *klass)
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
   ClutterActorClass *actor_class = CLUTTER_ACTOR_CLASS (klass);
   StWidgetClass *widget_class = ST_WIDGET_CLASS (klass);
-
-  g_type_class_add_private (klass, sizeof (StScrollViewPrivate));
 
   object_class->get_property = st_scroll_view_get_property;
   object_class->set_property = st_scroll_view_set_property;
@@ -983,7 +1011,7 @@ st_scroll_view_class_init (StScrollViewClass *klass)
 static void
 st_scroll_view_init (StScrollView *self)
 {
-  StScrollViewPrivate *priv = self->priv = SCROLL_VIEW_PRIVATE (self);
+  StScrollViewPrivate *priv = self->priv = st_scroll_view_get_instance_private (self);
 
   priv->hscrollbar_policy = GTK_POLICY_AUTOMATIC;
   priv->vscrollbar_policy = GTK_POLICY_AUTOMATIC;

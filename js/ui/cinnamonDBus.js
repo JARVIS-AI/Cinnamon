@@ -11,6 +11,7 @@ const AppletManager = imports.ui.appletManager;
 const DeskletManager = imports.ui.deskletManager;
 const ExtensionSystem = imports.ui.extensionSystem;
 const SearchProviderManager = imports.ui.searchProviderManager;
+const ModalDialog = imports.ui.modalDialog;
 const Util = imports.misc.util;
 const Cinnamon = imports.gi.Cinnamon;
 
@@ -75,6 +76,7 @@ const CinnamonIface =
                 <arg type="s" direction="in" /> \
                 <arg type="s" direction="in" /> \
             </method> \
+            <method name="induceSegfault" /> \
             <method name="switchWorkspaceRight" /> \
             <method name="switchWorkspaceLeft" /> \
             <method name="switchWorkspaceUp" /> \
@@ -82,6 +84,7 @@ const CinnamonIface =
             <method name="JumpToNewWorkspace" /> \
             <method name="RemoveCurrentWorkspace" /> \
             <method name="ShowExpo" /> \
+            <method name="ShowOverview" /> \
             <method name="GetRunningXletUUIDs"> \
                 <arg type="s" direction="in" /> \
                 <arg type="as" direction="out" /> \
@@ -100,8 +103,24 @@ const CinnamonIface =
             <method name="PushSubprocessResult"> \
                 <arg type="i" direction="in" name="process_id" /> \
                 <arg type="s" direction="in" name="result" /> \
+                <arg type="b" direction="in" name="success" /> \
             </method> \
             <method name="ToggleKeyboard"/> \
+            <method name="GetMonitors"> \
+                <arg type="ai" direction="out" name="monitors" /> \
+            </method> \
+            <method name="GetMonitorWorkRect"> \
+                <arg type="i" direction="in" name="monitor" /> \
+                <arg type="ai" direction="out" name="rect" /> \
+            </method> \
+            <signal name="MonitorsChanged"/> \
+            <method name="GetRunState"> \
+               <arg type="i" direction="out" name="state" /> \
+            </method> \
+            <method name="RestartCinnamon"> \
+                <arg type="b" direction="in" name="show_osd" /> \
+            </method> \
+            <signal name="RunStateChanged"/> \
         </interface> \
     </node>';
 
@@ -113,6 +132,12 @@ CinnamonDBus.prototype = {
     _init: function() {
         this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(CinnamonIface, this);
         this._dbusImpl.export(Gio.DBus.session, '/org/Cinnamon');
+
+        /* Although this signal comes from muffin, it is actually initiated by the
+         * layoutManager.Chrome.updateRegions method.  Workspace code in muffin filters
+         * out chrome updates that don't actually change the workarea before emitting this
+         * signal, which is desirable. */
+        global.screen.connect("workareas-changed", ()=> this.EmitMonitorsChanged());
     },
 
     /**
@@ -213,7 +238,7 @@ CinnamonDBus.prototype = {
             params[param] = params[param].deep_unpack();
 
         let monitorIndex = -1;
-        if (params['monitor'] >= 0) {
+        if (params.maybeGet('monitor') >= 0) {
             monitorIndex = params['monitor'];
         }
 
@@ -280,20 +305,17 @@ CinnamonDBus.prototype = {
         let list = null;
         let res = [];
 
-        if (type == "applet") {
-            list = AppletManager.appletObj;
-            for (let key in list) {
-                res.push(list[key]._uuid);
+        if (type === 'applet') {
+            for (let i = 0; i < AppletManager.definitions.length; i++) {
+                res.push(AppletManager.definitions[i].uuid);
             }
-        } else if (type == "desklet") {
-            list = DeskletManager.deskletObj;
-            for (let key in list) {
-                res.push(list[key]._uuid);
+        } else if (type === 'desklet') {
+            for (let i = 0; i < DeskletManager.definitions.length; i++) {
+                res.push(DeskletManager.definitions[i].uuid);
             }
         } else {
-            list = ExtensionSystem.runningExtensions;
-            for (let uuid in list) {
-                res.push(uuid);
+            for (let i = 0; i < ExtensionSystem.runningExtensions.length; i++) {
+                res.push(ExtensionSystem.runningExtensions[i]);
             }
         }
 
@@ -306,7 +328,7 @@ CinnamonDBus.prototype = {
 
     highlightXlet: function(uuid, instance_id, highlight) {
         let obj = this._getXletObject(uuid, instance_id);
-        if (obj.highlight) obj.highlight(highlight);
+        if (obj && obj.highlight) obj.highlight(highlight);
     },
 
     highlightPanel: function(id, highlight) {
@@ -329,7 +351,18 @@ CinnamonDBus.prototype = {
     },
 
     updateSetting: function(uuid, instance_id, key, payload) {
+        if (!Main.settingsManager.uuids[uuid]) {
+            global.logWarning(
+                `[CinnamonDBus] [${uuid}] Unable to find UUID from SettingsManager - ` +
+                'this is likely due to configuring settings from a removed xlet.'
+            );
+            return;
+        }
         Main.settingsManager.uuids[uuid][instance_id].remoteUpdate(key, payload);
+    },
+
+    induceSegfault: function() {
+        global.segfault();
     },
 
     switchWorkspaceLeft: function() {
@@ -368,14 +401,71 @@ CinnamonDBus.prototype = {
             Main.expo.toggle();
     },
 
-    PushSubprocessResult: function(process_id, result) {
+    ShowOverview: function() {
+        if (!Main.overview.animationInProgress)
+            Main.overview.toggle();
+    },
+
+    PushSubprocessResult: function(process_id, result, success) {
         if (Util.subprocess_callbacks[process_id]) {
-            Util.subprocess_callbacks[process_id](result);
+            if (success)
+                Util.subprocess_callbacks[process_id](result);
+            delete Util.subprocess_callbacks[process_id];
         }
     },
 
     ToggleKeyboard: function() {
         Main.keyboard.toggle();
+    },
+
+    GetMonitors: function() {
+        let monitors = [];
+
+        try {
+            for (let i = 0; i < Main.layoutManager.monitors.length; i++) {
+                let current = Main.layoutManager.monitors[i];
+
+                monitors.push(current.index);
+            }
+        } catch (e) {
+            log(e.message);
+            /* Something broke, trigger a GDBus.Error back to the caller instead of returning bad things */
+            monitors = [];
+        }
+
+        if (monitors.length == 0) {
+            throw new Error("GetMonitors: no valid monitors");
+        }
+
+        return monitors;
+    },
+
+    GetMonitorWorkRect: function(index) {
+        let n_mons = global.screen.get_n_monitors();
+
+        if ((index < 0) || index > (n_mons - 1)) {
+            throw new Error("GetMonitorWorkRect: invalid monitor index: " + index + ".  Must be 0 to " + (n_mons - 1));
+        }
+
+        let rect = global.screen.get_active_workspace().get_work_area_for_monitor(index);
+
+        return [rect.x, rect.y, rect.width, rect.height];
+    },
+
+    GetRunState: function() {
+        return Main.runState;
+    },
+
+    RestartCinnamon: function(showOsd) {
+        Main.restartCinnamon(showOsd);
+    },
+
+    EmitRunStateChanged: function() {
+        this._dbusImpl.emit_signal('RunStateChanged', null);
+    },
+
+    EmitMonitorsChanged: function() {
+        this._dbusImpl.emit_signal('MonitorsChanged', null);
     },
 
     CinnamonVersion: Config.PACKAGE_VERSION

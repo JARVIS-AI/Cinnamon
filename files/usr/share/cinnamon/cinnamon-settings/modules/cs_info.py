@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
 import platform
 import subprocess
@@ -6,8 +6,10 @@ import shlex
 import os
 import re
 import threading
+from json import loads
 
-from GSettingsWidgets import *
+from SettingsWidgets import SidePage
+from xapp.GSettingsWidgets import *
 
 
 def killProcess(process):
@@ -26,7 +28,7 @@ def getProcessOut(command):
         if not line:
             break
         if line != '':
-            lines.append(line)
+            lines.append(line.decode('utf-8'))
     timer.cancel()
     return lines
 
@@ -54,16 +56,13 @@ def getGraphicsInfos():
 
 def getDiskSize():
     disksize = 0
-    moreThanOnce = 0
-    for line in getProcessOut(("df", "-l")):
-        if line.startswith("/dev/"):
-            moreThanOnce += 1
-            disksize += float(line.split()[1])
+    out = getProcessOut(("lsblk", "--json", "--output", "size", "--bytes", "--nodeps"))
+    jsonobj = loads(''.join(out))
 
-    if (moreThanOnce > 1):
-        return disksize, True
-    else:
-        return disksize, False
+    for blk in jsonobj['blockdevices']:
+        disksize += int(blk['size'])
+
+    return disksize, (len(jsonobj['blockdevices']) > 1)
 
 
 def getProcInfos():
@@ -87,22 +86,27 @@ def createSystemInfos():
     infos = []
     arch = platform.machine().replace("_", "-")
     (memsize, memunit) = procInfos['mem_total'].split(" ")
-    processorName = procInfos['cpu_name'].replace("(R)", u"\u00A9").replace("(TM)", u"\u2122")
+    processorName = procInfos['cpu_name'].replace("(R)", "\u00A9").replace("(TM)", "\u2122")
     if 'cpu_cores' in procInfos:
-        processorName = processorName + u" \u00D7 " + procInfos['cpu_cores']
+        processorName = processorName + " \u00D7 " + procInfos['cpu_cores']
 
     if os.path.exists("/etc/linuxmint/info"):
         args = shlex.split("awk -F \"=\" '/GRUB_TITLE/ {print $2}' /etc/linuxmint/info")
-        title = subprocess.check_output(args).rstrip("\n")
+        title = subprocess.check_output(args).decode('utf-8').rstrip("\n")
         infos.append((_("Operating System"), title))
     elif os.path.exists("/etc/arch-release"):
         contents = open("/etc/arch-release", 'r').readline().split()
         title = ' '.join(contents[:2]) or "Arch Linux"
         infos.append((_("Operating System"), title))
+    elif os.path.exists("/etc/manjaro-release"):
+        contents = open("/etc/manjaro-release", 'r').readline().split()
+        title = ' '.join(contents[:2]) or "Manjaro Linux"
+        infos.append((_("Operating System"), title))
     else:
-        s = '%s (%s)' % (' '.join(platform.linux_distribution()), arch)
+        import distro
+        s = '%s (%s)' % (' '.join(distro.linux_distribution()), arch)
         # Normalize spacing in distribution name
-        s = re.sub('\s{2,}', ' ', s)
+        s = re.sub(r'\s{2,}', ' ', s)
         infos.append((_("Operating System"), s))
     if 'CINNAMON_VERSION' in os.environ:
         infos.append((_("Cinnamon Version"), os.environ['CINNAMON_VERSION']))
@@ -118,7 +122,7 @@ def createSystemInfos():
         diskText = _("Hard Drives")
     else:
         diskText = _("Hard Drive")
-    infos.append((diskText, '%.1f %s' % ((diskSize / (1000*1000)), _("GB"))))
+    infos.append((diskText, '%.1f %s' % ((diskSize / (1000*1000*1000)), _("GB"))))
 
     cards = getGraphicsInfos()
     for card in cards:
@@ -139,7 +143,7 @@ class Module:
 
     def on_module_selected(self):
         if not self.loaded:
-            print "Loading Info module"
+            print("Loading Info module")
 
             infos = createSystemInfos()
 
@@ -155,16 +159,36 @@ class Module:
                 widget.pack_start(labelKey, False, False, 0)
                 labelKey.get_style_context().add_class("dim-label")
                 labelValue = Gtk.Label.new(value)
+                labelValue.set_selectable(True)
+                labelValue.set_line_wrap(True)
                 widget.pack_end(labelValue, False, False, 0)
                 settings.add_row(widget)
 
             if os.path.exists("/usr/bin/upload-system-info"):
                 widget = SettingsWidget()
-                button = Gtk.Button(_("Upload system information"))
-                button.set_tooltip_text(_("No personal information included"))
-                button.connect("clicked", self.on_button_clicked)
+
+                spinner = Gtk.Spinner(visible=True)
+                button = Gtk.Button(label=_("Upload system information"),
+                                    tooltip_text=_("No personal information included"),
+                                    always_show_image=True,
+                                    image=spinner)
+                button.connect("clicked", self.on_button_clicked, spinner)
                 widget.pack_start(button, True, True, 0)
                 settings.add_row(widget)
 
-    def on_button_clicked(self, button):
-        subprocess.Popen(["upload-system-info"])
+    def on_button_clicked(self, button, spinner):
+
+        try:
+            subproc = Gio.Subprocess.new(["upload-system-info"], Gio.SubprocessFlags.NONE)
+            subproc.wait_check_async(None, self.on_subprocess_complete, spinner)
+            spinner.start()
+        except GLib.Error as e:
+            print("upload-system-info failed to run: %s" % e.message)
+
+    def on_subprocess_complete(self, subproc, result, spinner):
+        spinner.stop()
+
+        try:
+            success = subproc.wait_check_finish(result)
+        except GLib.Error as e:
+            print("upload-system-info failed: %s" % e.message)

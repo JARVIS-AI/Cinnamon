@@ -1,10 +1,11 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib
 
-from GSettingsWidgets import *
+from SettingsWidgets import SidePage
+from xapp.GSettingsWidgets import *
 
 
 class Module:
@@ -19,7 +20,7 @@ class Module:
 
     def on_module_selected(self):
         if not self.loaded:
-            print "Loading Mouse module"
+            print("Loading Mouse module")
 
             self.sidePage.stack = SettingsStack()
             self.sidePage.add_widget(self.sidePage.stack)
@@ -33,6 +34,9 @@ class Module:
             switch = GSettingsSwitch(_("Left handed (mouse buttons inverted)"), "org.cinnamon.settings-daemon.peripherals.mouse", "left-handed")
             settings.add_row(switch)
 
+            switch = GSettingsSwitch(_("Reverse scrolling direction"), "org.cinnamon.settings-daemon.peripherals.mouse", "natural-scroll")
+            settings.add_row(switch)
+
             switch = GSettingsSwitch(_("Show position of pointer when the Control key is pressed"), "org.cinnamon.settings-daemon.peripherals.mouse", "locate-pointer")
             settings.add_row(switch)
 
@@ -44,19 +48,25 @@ class Module:
 
             settings = page.add_section(_("Pointer size and speed"))
 
-            widget = GSettingsRange(_("Size"), "org.cinnamon.desktop.interface", "cursor-size", _("Smaller"), _("Larger"), 5, 50)
+            widget = GSettingsRange(_("Size"), "org.cinnamon.desktop.interface", "cursor-size", _("Smaller"), _("Larger"), 5, 50, show_value=False)
             widget.add_mark(24.0, Gtk.PositionType.TOP, None)
             settings.add_row(widget)
 
-            slider = GSettingsRange(_("Acceleration"), "org.cinnamon.settings-daemon.peripherals.mouse", "motion-acceleration", _("Slow"), _("Fast"), 1, 10)
-            settings.add_row(slider)
+            widget = GSettingsSwitch(_("Custom Acceleration"), "org.cinnamon.settings-daemon.peripherals.mouse", "custom-acceleration")
+            settings.add_row(widget)
 
-            slider = GSettingsRange(_("Sensitivity"), "org.cinnamon.settings-daemon.peripherals.mouse", "motion-threshold", _("Low"), _("High"), 1, 10, invert=True)
-            settings.add_row(slider)
+            slider = GSettingsRange(_("Acceleration"), "org.cinnamon.settings-daemon.peripherals.mouse", "motion-acceleration", _("Slow"), _("Fast"), 1, 10, show_value=False)
+            settings.add_reveal_row(slider, "org.cinnamon.settings-daemon.peripherals.mouse", "custom-acceleration")
+
+            widget = GSettingsSwitch(_("Custom Sensitivity"), "org.cinnamon.settings-daemon.peripherals.mouse", "custom-threshold")
+            settings.add_row(widget)
+
+            slider = GSettingsRange(_("Sensitivity"), "org.cinnamon.settings-daemon.peripherals.mouse", "motion-threshold", _("Low"), _("High"), 1, 10, show_value=False, flipped=True)
+            settings.add_reveal_row(slider, "org.cinnamon.settings-daemon.peripherals.mouse", "custom-threshold")
 
             settings = page.add_section(_("Double-Click timeout"))
 
-            slider = GSettingsRange(_("Timeout"), "org.cinnamon.settings-daemon.peripherals.mouse", "double-click", _("Short"), _("Long"), 100, 1000)
+            slider = GSettingsRange(_("Timeout"), "org.cinnamon.settings-daemon.peripherals.mouse", "double-click", _("Short"), _("Long"), 100, 1000, show_value=False)
             settings.add_row(slider)
 
             box = SettingsWidget()
@@ -79,46 +89,49 @@ class Module:
             revealer = SettingsRevealer("org.cinnamon.settings-daemon.peripherals.touchpad", "touchpad-enabled")
             page.pack_start(revealer, False, True, 0)
 
-            settings = SettingsBox(_("General"))
+            settings = SettingsSection(_("General"))
             revealer.add(settings)
 
             switch = GSettingsSwitch(_("Tap to click"), "org.cinnamon.settings-daemon.peripherals.touchpad", "tap-to-click")
             settings.add_row(switch)
 
+            switch = GSettingsSwitch(_("Disable touchpad when a mouse is attached"), "org.cinnamon.settings-daemon.peripherals.touchpad", "disable-with-external-mouse")
+            settings.add_row(switch)
+
             switch = GSettingsSwitch(_("Disable touchpad while typing"), "org.cinnamon.settings-daemon.peripherals.touchpad", "disable-while-typing")
             settings.add_row(switch)
 
-            button_list = [[0, _("Disabled")], [1, _("Left button")], [2, _("Middle button")], [3, _("Right button")]]
+            clickpad_list = [[0, _("Left click only")], [3, _("Automatic")], [1, _("Emulate mouse buttons")], [2, _("Use multiple fingers for right and middle click")]]
 
-            combo = GSettingsComboBox(_("Two-finger click emulation:"), "org.cinnamon.settings-daemon.peripherals.touchpad", "two-finger-click", button_list, valtype="int")
+            combo = GSettingsComboBox(_("Click actions"), "org.cinnamon.settings-daemon.peripherals.touchpad", "clickpad-click", clickpad_list, valtype=int)
             settings.add_row(combo)
 
-            combo = GSettingsComboBox(_("Three-finger click emulation:"), "org.cinnamon.settings-daemon.peripherals.touchpad", "three-finger-click", button_list, valtype="int")
-            settings.add_row(combo)
-
-            settings = SettingsBox(_("Scrolling"))
+            settings = SettingsSection(_("Scrolling"))
             revealer.add(settings)
 
             switch = GSettingsSwitch(_("Reverse scrolling direction"), "org.cinnamon.settings-daemon.peripherals.touchpad", "natural-scroll")
             settings.add_row(switch)
 
-            switch = GSettingsSwitch(_("Vertical edge scrolling"), "org.cinnamon.settings-daemon.peripherals.touchpad", "vertical-edge-scrolling")
-            settings.add_row(switch)
-            switch = GSettingsSwitch(_("Horizontal edge scrolling"), "org.cinnamon.settings-daemon.peripherals.touchpad", "horizontal-edge-scrolling")
-            settings.add_row(switch)
-            switch = GSettingsSwitch(_("Vertical two-finger scrolling"), "org.cinnamon.settings-daemon.peripherals.touchpad", "vertical-two-finger-scrolling")
-            settings.add_row(switch)
-            switch = GSettingsSwitch(_("Horizontal two-finger scrolling"), "org.cinnamon.settings-daemon.peripherals.touchpad", "horizontal-two-finger-scrolling")
+            clickpad_list = [[0, _("No scrolling")], [3, _("Automatic")], [1, _("Two-finger scrolling")], [2, _("Edge scrolling")]]
+            combo = GSettingsComboBox(_("Scrolling method"), "org.cinnamon.settings-daemon.peripherals.touchpad", "scrolling-method", clickpad_list, valtype=int)
+            settings.add_row(combo)
+            switch = GSettingsSwitch(_("Horizontal scrolling"), "org.cinnamon.settings-daemon.peripherals.touchpad", "horizontal-scrolling")
             settings.add_row(switch)
 
-            settings = SettingsBox(_("Pointer speed"))
+            settings = SettingsSection(_("Pointer speed"))
             revealer.add(settings)
 
-            slider = GSettingsRange(_("Acceleration"), "org.cinnamon.settings-daemon.peripherals.touchpad", "motion-acceleration", _("Slow"), _("Fast"), 1, 10)
-            settings.add_row(slider)
+            switch = GSettingsSwitch(_("Custom Acceleration"), "org.cinnamon.settings-daemon.peripherals.touchpad", "custom-acceleration")
+            settings.add_row(switch)
 
-            slider = GSettingsRange(_("Sensitivity"), "org.cinnamon.settings-daemon.peripherals.touchpad", "motion-threshold", _("Low"), _("High"), 1, 10, invert=True)
-            settings.add_row(slider)
+            slider = GSettingsRange(_("Acceleration"), "org.cinnamon.settings-daemon.peripherals.touchpad", "motion-acceleration", _("Slow"), _("Fast"), 1, 10, show_value=False)
+            settings.add_reveal_row(slider, "org.cinnamon.settings-daemon.peripherals.touchpad", "custom-acceleration")
+
+            switch = GSettingsSwitch(_("Custom Sensitivity"), "org.cinnamon.settings-daemon.peripherals.touchpad", "custom-threshold")
+            settings.add_row(switch)
+
+            slider = GSettingsRange(_("Sensitivity"), "org.cinnamon.settings-daemon.peripherals.touchpad", "motion-threshold", _("Low"), _("High"), 1, 10, show_value=False, flipped=True)
+            settings.add_reveal_row(slider, "org.cinnamon.settings-daemon.peripherals.touchpad", "custom-threshold")
 
             self.sidePage.stack.add_titled(page, "touchpad", _("Touchpad"))
 

@@ -1,6 +1,9 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
-from GSettingsWidgets import *
+import os
+
+from SettingsWidgets import SidePage
+from xapp.GSettingsWidgets import *
 from gi.repository import *
 
 PREF_MEDIA_AUTORUN_NEVER = "autorun-never"
@@ -14,6 +17,7 @@ CUSTOM_ITEM_OPEN_FOLDER = "cc-item-open-folder"
 
 MEDIA_HANDLING_SCHEMA = "org.cinnamon.desktop.media-handling"
 TERMINAL_SCHEMA = "org.cinnamon.desktop.default-applications.terminal"
+CALCULATOR_SCHEMA = "org.cinnamon.desktop.default-applications.calculator"
 
 PREF_CONTENT_TYPE = 0
 PREF_GEN_CONTENT_TYPE = 1
@@ -26,90 +30,92 @@ DEF_HEADING = 2
 preferred_app_defs = [
     # 1st mimetype is to let us find apps
     # 2nd mimetype is to set default handler for (so we handle all of that type, not just a specific format)
-    ( "x-scheme-handler/http",   "x-scheme-handler/http",      _("_Web") ),
-    ( "x-scheme-handler/mailto", "x-scheme-handler/mailto",    _("_Mail") ),
+    ( "inode/directory",         "inode/directory",          _("File Manager") ),
+    ( "x-scheme-handler/http",   "x-scheme-handler/http",    _("_Web") ),
+    ( "x-scheme-handler/mailto", "x-scheme-handler/mailto",  _("_Mail") ),
     ( "application/msword",      "application/msword",       _("Documents") ),
     ( "text/plain",              "text/plain",               _("Plain Text") ),
     ( "audio/x-vorbis+ogg",      "audio",                    _("M_usic") ),
     ( "video/x-ogm+ogg",         "video",                    _("_Video") ),
     ( "image/jpeg",              "image",                    _("_Photos") ),
-    ( "text/x-python",           "text/x-python",          _("Source Code") ),
+    ( "text/x-python",           "text/x-python",            _("Source Code") ),
+    ( "application/pdf",         "application/pdf",          _("PDF") ),
 ]
 
 mimetypes = {}
 mimetypes["audio"]=[
-  "audio/3gpp",
-  "audio/aac",
-  "audio/ac3",
-  "audio/flac",
-  "audio/m4a",
-  "audio/midi",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/mp4a-latm",
-  "audio/mpeg",
-  "audio/mpeg3",
-  "audio/mpg",
-  "audio/ogg",
-  "audio/vorbis",
-  "audio/wav",
-  "audio/wave",
-  "audio/webm",
-  "audio/x-aac",
-  "audio/x-aiff",
-  "audio/x-flac",
-  "audio/x-mp3",
-  "audio/x-mpeg",
-  "audio/x-mpeg-3",
-  "audio/x-mpg",
-  "audio/x-ms-asf",
-  "audio/x-ms-wma",
-  "audio/x-ogg",
-  "audio/x-oggflac",
-  "audio/x-vorbis",
-  "audio/x-vorbis+ogg",
-  "audio/x-wav",
-  "audio/x-wavpack"
+    "audio/3gpp",
+    "audio/aac",
+    "audio/ac3",
+    "audio/flac",
+    "audio/m4a",
+    "audio/midi",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/mp4a-latm",
+    "audio/mpeg",
+    "audio/mpeg3",
+    "audio/mpg",
+    "audio/ogg",
+    "audio/vorbis",
+    "audio/wav",
+    "audio/wave",
+    "audio/webm",
+    "audio/x-aac",
+    "audio/x-aiff",
+    "audio/x-flac",
+    "audio/x-mp3",
+    "audio/x-mpeg",
+    "audio/x-mpeg-3",
+    "audio/x-mpg",
+    "audio/x-ms-asf",
+    "audio/x-ms-wma",
+    "audio/x-ogg",
+    "audio/x-oggflac",
+    "audio/x-vorbis",
+    "audio/x-vorbis+ogg",
+    "audio/x-wav",
+    "audio/x-wavpack"
 ]
 
 mimetypes["video"]=[
-  "video/3gp",
-  "video/3gpp",
-  "video/divx",
-  "video/flv",
-  "video/mp4",
-  "video/mp4v-es",
-  "video/mpeg",
-  "video/msvideo",
-  "video/ogg",
-  "video/quicktime",
-  "video/vivo",
-  "video/vnd.divx",
-  "video/vnd.rn-realvideo",
-  "video/webm",
-  "video/x-anim",
-  "video/x-avi",
-  "video/x-flc",
-  "video/x-fli",
-  "video/x-flic",
-  "video/x-flv",
-  "video/x-m4v",
-  "video/x-matroska",
-  "video/x-mng",
-  "video/x-mpeg",
-  "video/x-mpeg2",
-  "video/x-ms-afs",
-  "video/x-ms-asf",
-  "video/x-ms-asx",
-  "video/x-ms-wm",
-  "video/x-ms-wmv",
-  "video/x-ms-wvx",
-  "video/x-ms-wvxvideo",
-  "video/x-msvideo",
-  "video/x-nsv",
-  "video/x-ogm+ogg",
-  "video/x-theora",
-  "video/x-theora+ogg"
+    "video/3gp",
+    "video/3gpp",
+    "video/divx",
+    "video/flv",
+    "video/mp4",
+    "video/mp4v-es",
+    "video/mpeg",
+    "video/msvideo",
+    "video/ogg",
+    "video/quicktime",
+    "video/vivo",
+    "video/vnd.divx",
+    "video/vnd.rn-realvideo",
+    "video/webm",
+    "video/x-anim",
+    "video/x-avi",
+    "video/x-flc",
+    "video/x-fli",
+    "video/x-flic",
+    "video/x-flv",
+    "video/x-m4v",
+    "video/x-matroska",
+    "video/x-mng",
+    "video/x-mpeg",
+    "video/x-mpeg2",
+    "video/x-ms-afs",
+    "video/x-ms-asf",
+    "video/x-ms-asx",
+    "video/x-ms-wm",
+    "video/x-ms-wmv",
+    "video/x-ms-wvx",
+    "video/x-ms-wvxvideo",
+    "video/x-msvideo",
+    "video/x-nsv",
+    "video/x-ogm+ogg",
+    "video/x-theora",
+    "video/x-theora+ogg"
 ]
 
 mimetypes["text/x-python"] = [
@@ -206,11 +212,13 @@ class DefaultAppChooserButton(Gtk.AppChooserButton):
 
     def onChanged(self, button):
         info = button.get_app_info()
-        print "%s: " % info.get_name()
+
         if info:
+            print("%s: " % info.get_name())
+
             supported_mimetypes = info.get_supported_types()
             hardcoded_mimetypes = None
-            if self.generic_content_type in mimetypes.keys():
+            if self.generic_content_type in mimetypes:
                 hardcoded_mimetypes = mimetypes[self.generic_content_type]
 
             set_mimes = []
@@ -220,24 +228,24 @@ class DefaultAppChooserButton(Gtk.AppChooserButton):
                 for t in sorted(supported_mimetypes):
                     if t.startswith(self.generic_content_type):
                         if info.set_as_default_for_type (t):
-                            print "  Set as default for supported %s" % t
+                            print("  Set as default for supported %s" % t)
                             set_mimes.append(t)
                         else:
-                            print "  Failed to set as default application for '%s'" % t
+                            print("  Failed to set as default application for '%s'" % t)
 
             # Also assign mimes hardcoded in the mimetypes hashtable
             if hardcoded_mimetypes is not None:
                 for t in sorted(hardcoded_mimetypes):
                     if t not in set_mimes:
                         if info.set_as_default_for_type (t):
-                            print "  Set as default for hardcoded %s" % t
+                            print("  Set as default for hardcoded %s" % t)
                         else:
-                            print "  Failed to set as default application for '%s'" % t
+                            print("  Failed to set as default application for '%s'" % t)
 
             #Web
             if self.content_type == "x-scheme-handler/http":
                 if info.set_as_default_for_type ("x-scheme-handler/https") == False:
-                    print "  Failed to set '%s' as the default application for '%s'" % (info.get_name(), "x-scheme-handler/https")
+                    print("  Failed to set '%s' as the default application for '%s'" % (info.get_name(), "x-scheme-handler/https"))
 
 class DefaultTerminalButton(Gtk.AppChooserButton): #TODO: See if we can get this to change the x-terminal-emulator default to allow it to be a more global change rather then just cinnamon/nemo
     def __init__(self):
@@ -262,6 +270,46 @@ class DefaultTerminalButton(Gtk.AppChooserButton): #TODO: See if we can get this
                 #this crazy if statement makes sure remaining desktop file info is not empty, then prevents root terminals from showing, then prevents repeating terminals from trying to being added which leave a blank space and Gtk-WARNING's
                 if (exec_val is not None and name_val is not None and icon_val is not None and not "gksu" in exec_val and exec_val not in self.active_items):
                     self.append_custom_item(exec_val, name_val, Gio.ThemedIcon.new(icon_val))
+                    self.active_items.append(exec_val)
+                    if (self.key_value == exec_val):
+                        self.set_active_custom_item(self.key_value)
+            count_up += 1
+
+    def onChanged(self, button):
+        index_num = button.get_active()
+        command_key = self.active_items[index_num]
+        self.settings.set_string("exec", command_key)
+
+class DefaultCalculatorButton(Gtk.AppChooserButton):
+    def __init__(self):
+        super(DefaultCalculatorButton, self).__init__()
+        apps = Gio.app_info_get_all()
+        self.this_item = []
+        self.active_items = []
+        self.settings = Gio.Settings.new(CALCULATOR_SCHEMA)
+        self.key_value = self.settings.get_string("exec")
+        self.connect("changed", self.onChanged)
+        count_up = 0
+
+        while (self.this_item is not None and count_up < len(apps)):
+            self.this_item = apps[count_up]
+            cat_val = Gio.DesktopAppInfo.get_categories(self.this_item)
+            exec_val = Gio.DesktopAppInfo.get_string(self.this_item, "Exec")
+            name_val = Gio.DesktopAppInfo.get_string(self.this_item, "Name")
+            icon_val = Gio.DesktopAppInfo.get_string(self.this_item, "Icon")
+            comment_val = Gio.DesktopAppInfo.get_string(self.this_item, "Comment")
+            #calculators don't have mime types, so we check for "Calculator" under the "Category" key in desktop files
+            if (cat_val is not None and "Calculator" in cat_val) or \
+               (exec_val is not None and "alculator" in exec_val.lower()) or \
+               (name_val is not None and "alculator" in name_val.lower()) or \
+               (comment_val is not None and "alculator" in comment_val.lower()):
+                #this if statement makes sure remaining desktop file info is not empty
+                if (exec_val is not None and name_val is not None and icon_val is not None):
+                    if os.path.exists(icon_val):
+                        icon = Gio.FileIcon.new(Gio.File.new_for_path(icon_val))
+                    else:
+                        icon = Gio.ThemedIcon.new(icon_val)
+                    self.append_custom_item(exec_val, name_val, icon)
                     self.active_items.append(exec_val)
                     if (self.key_value == exec_val):
                         self.set_active_custom_item(self.key_value)
@@ -352,9 +400,10 @@ class CustomAppChooserButton(Gtk.AppChooserButton):
         self.setPreference(pref_open_folder, PREF_MEDIA_AUTORUN_X_CONTENT_OPEN_FOLDER)
 
 class OtherTypeDialog(Gtk.Dialog):
-    def __init__(self, media_settings):
+    def __init__(self, media_settings, transient_parent):
         super(OtherTypeDialog, self).__init__(title = _("Other Media"),
-                                              transient_for = None,
+                                              transient_for = transient_parent,
+                                              border_width = 6,
                                               flags = 0)
         self.add_button(_("Close"), Gtk.ResponseType.OK)
 
@@ -397,6 +446,7 @@ class OtherTypeDialog(Gtk.Dialog):
         return True
 
     def getDescription(self, content_type):
+        description = None
         for d in other_defs:
             if content_type == d[DEF_CONTENT_TYPE]:
                 s = d[DEF_LABEL]
@@ -407,7 +457,7 @@ class OtherTypeDialog(Gtk.Dialog):
                 break
 
         if description == None:
-            print "Content type '%s' is missing from the info panel" % content_type
+            print("Content type '%s' is missing from the info panel" % content_type)
             return Gio.content_type_get_description(content_type)
 
         return description
@@ -462,16 +512,16 @@ class Module:
     comment = _("Preferred Applications")
 
     def __init__(self, content_box):
-        keywords = _("media, defaults, applications, programs, removable, browser, email, calendar, music, videos, photos, images, cd, autostart, autoplay")
+        keywords = _("media, defaults, applications, programs, removable, browser, email, calendar, music, videos, photos, images, cd, autoplay, favorite, apps")
         sidePage = SidePage(_("Preferred Applications"), "cs-default-applications", keywords, content_box, module=self)
         self.sidePage = sidePage
 
     def on_module_selected(self):
         if not self.loaded:
-            print "Loading Default module"
+            print("Loading Default module")
 
             self.media_settings = Gio.Settings.new(MEDIA_HANDLING_SCHEMA)
-            self.other_type_dialog = OtherTypeDialog(self.media_settings)
+            self.other_type_dialog = OtherTypeDialog(self.media_settings, self.sidePage.window)
 
             self.sidePage.stack = SettingsStack()
             self.sidePage.add_widget(self.sidePage.stack)
@@ -497,9 +547,20 @@ class Module:
                 if not button.get_active():
                     settings.add_row(widget)
 
+
+            # Terminal
             widget = SettingsWidget()
             button = DefaultTerminalButton()
             label = MnemonicLabel(_("Te_rminal"), button)
+            size_group.add_widget(button)
+            widget.pack_start(label, False, False, 0)
+            widget.pack_end(button, False, False, 0)
+            settings.add_row(widget)
+
+            # Calculator
+            widget = SettingsWidget()
+            button = DefaultCalculatorButton()
+            label = MnemonicLabel(_("_Calculator"), button)
             size_group.add_widget(button)
             widget.pack_start(label, False, False, 0)
             widget.pack_end(button, False, False, 0)
@@ -515,7 +576,7 @@ class Module:
             switch.fill_row()
             page.add(switch)
 
-            settings = SettingsBox(_("Removable media"))
+            settings = SettingsSection(_("Removable media"))
             switch.revealer.add(settings)
             page.pack_start(switch.revealer, False, False, 0)
 
@@ -530,11 +591,15 @@ class Module:
                 widget.pack_end(button, False, False, 0)
                 settings.add_row(widget)
 
-            button = Button(_("_Other Media..."), self.onMoreClicked)
+            # FIXMEEEEEEEE??
+            button = Button(_("_Other Media...").strip("_"), self.onMoreClicked)
             settings.add_row(button)
 
     def onMoreClicked(self, widget):
         self.other_type_dialog.doShow(widget.get_toplevel())
+
+    def _setParentRef(self, window):
+        self.sidePage.window = window
 
 class InvertedSwitch(SettingsWidget):
     def __init__(self, label, schema, key):

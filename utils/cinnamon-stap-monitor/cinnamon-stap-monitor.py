@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 
-import os
 import sys
 import signal
 signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -8,7 +7,7 @@ import _thread
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, Gtk, GObject, GLib, Pango, GdkPixbuf, Gio
+from gi.repository import Gdk, Gtk, GObject, GLib, Pango
 
 import time
 from datetime import timedelta
@@ -107,9 +106,9 @@ class Main:
 
         elapsed = now - self.start_time
 
-        string = str(timedelta(seconds=int(elapsed + .5)))
+        time_passed = timedelta(seconds=int(elapsed + .5))
 
-        self.timer_label.set_text("Elapsed time: %s" % string)
+        self.timer_label.set_text("Elapsed time: {}".format(time_passed))
 
         return True
 

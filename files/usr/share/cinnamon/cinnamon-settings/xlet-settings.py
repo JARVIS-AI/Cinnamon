@@ -1,13 +1,22 @@
 #!/usr/bin/python3
-
+import getopt
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('XApp', '1.0')
+
+import os
 import sys
-sys.path.append('/usr/share/cinnamon/cinnamon-settings/bin')
+from setproctitle import setproctitle
+import config
+sys.path.append(config.currentPath + "/bin")
 import gettext
 import json
+import importlib.util
+import traceback
+
 from JsonSettingsWidgets import *
-from gi.repository import Gtk, Gio
+from ExtensionCore import find_extension_subdir
+from gi.repository import Gtk, Gio, XApp
 
 # i18n
 gettext.install("cinnamon", "/usr/share/locale")
@@ -35,7 +44,9 @@ XLET_SETTINGS_WIDGETS = {
     "tween"             :   "JSONSettingsTweenChooser",
     "effect"            :   "JSONSettingsEffectChooser",
     "datechooser"       :   "JSONSettingsDateChooser",
-    "keybinding"        :   "JSONSettingsKeybinding"
+    "timechooser"       :   "JSONSettingsTimeChooser",
+    "keybinding"        :   "JSONSettingsKeybinding",
+    "list"              :   "JSONSettingsList"
 }
 
 class XLETSettingsButton(Button):
@@ -76,21 +87,72 @@ def translate(uuid, string):
     return _(string)
 
 class MainWindow(object):
-    def __init__(self, xlet_type, uuid, instance_id=None):
+    def __init__(self, xlet_type, uuid, *instance_id):
+        ## Respecting preview implementation, add the possibility to open a specific tab (if there
+        ## are multiple layouts) and/or a specific instance settings (if there are multiple
+        ## instances of a xlet).
+        ## To do this, two new arguments:
+        ##   -t <n> or --tab=<n>, where <n> is the tab index (starting at 0).
+        ##   -i <id> or --id=<id>, where <id> is the id of the instance.
+        ## Examples, supposing there are two instances of Cinnamenu@json applet, with ids '210' and
+        ## '235' (uncomment line 144 containing print("self.instance_info =", self.instance_info)
+        ## to know all instances ids):
+        ## (Please note that cinnamon-settings is the one offered in #8333)
+        ## cinnamon-settings applets Cinnamenu@json         # opens first tab in first instance
+        ## cinnamon-settings applets Cinnamenu@json '235'   # opens first tab in '235' instance
+        ## cinnamon-settings applets Cinnamenu@json 235     # idem
+        ## cinnamon-settings applets Cinnamenu@json -t 1 -i 235  # opens 2nd tab in '235' instance
+        ## cinnamon-settings applets Cinnamenu@json --tab=1 --id=235  # idem
+        ## cinnamon-settings applets Cinnamenu@json --tab=1 # opens 2nd tab in first instance
+        ## (Also works with 'xlet-settings applet' instead of 'cinnamon-settings applets'.)
+
+        #print("instance_id =", instance_id)
+        self.tab = 0
+        opts = []
+        try:
+            instance_id = int(instance_id[0])
+        except:
+            instance_id = None
+            try:
+                if len(sys.argv) > 3:
+                    opts = getopt.getopt(sys.argv[3:], "t:i:", ["tab=", "id="])[0]
+            except getopt.GetoptError:
+                pass
+            if len(sys.argv) > 4:
+                try:
+                    instance_id = int(sys.argv[4])
+                except ValueError:
+                    instance_id = None
+        #print("opts =", opts)
+        for opt, arg in opts:
+            if opt in ("-t", "--tab"):
+                if arg.isdecimal():
+                    self.tab = int(arg)
+            elif opt in ("-i", "--id"):
+                if arg.isdecimal():
+                    instance_id = int(arg)
+        if instance_id:
+            instance_id = str(instance_id)
+        #print("self.tab =", self.tab)
+        #print("instance_id =", instance_id)
         self.type = xlet_type
         self.uuid = uuid
         self.selected_instance = None
+        self.gsettings = Gio.Settings.new("org.cinnamon")
+        self.custom_modules = {}
 
         self.load_xlet_data()
         self.build_window()
         self.load_instances()
+        #print("self.instance_info =", self.instance_info)
         self.window.show_all()
         if instance_id and len(self.instance_info) > 1:
             for info in self.instance_info:
                 if info["id"] == instance_id:
                     self.set_instance(info)
                     break
-
+        else:
+            self.set_instance(self.instance_info[0])
         try:
             Gio.DBusProxy.new_for_bus(Gio.BusType.SESSION, Gio.DBusProxyFlags.NONE, None,
                                       "org.Cinnamon", "/org/Cinnamon", "org.Cinnamon", None, self._on_proxy_ready, None)
@@ -117,10 +179,10 @@ class MainWindow(object):
             self.xlet_meta = json.loads(raw_data)
         else:
             print("Could not find %s metadata for uuid %s - are you sure it's installed correctly?" % (self.type, self.uuid))
-            self.quit()
+            quit()
 
     def build_window(self):
-        self.window = Gtk.Window()
+        self.window = XApp.GtkWindow()
         self.window.set_default_size(800, 600)
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.window.add(main_box)
@@ -158,25 +220,34 @@ class MainWindow(object):
         menu = Gtk.Menu()
         menu.set_halign(Gtk.Align.END)
 
-        restore_option = Gtk.MenuItem(_("Import from a file"))
+        restore_option = Gtk.MenuItem(label=_("Import from a file"))
         menu.append(restore_option)
         restore_option.connect("activate", self.restore)
         restore_option.show()
 
-        backup_option = Gtk.MenuItem(_("Export to a file"))
+        backup_option = Gtk.MenuItem(label=_("Export to a file"))
         menu.append(backup_option)
         backup_option.connect("activate", self.backup)
         backup_option.show()
 
-        reset_option = Gtk.MenuItem(_("Reset to defaults"))
+        reset_option = Gtk.MenuItem(label=_("Reset to defaults"))
         menu.append(reset_option)
         reset_option.connect("activate", self.reset)
         reset_option.show()
 
+        separator = Gtk.SeparatorMenuItem()
+        menu.append(separator)
+        separator.show()
+
+        reload_option = Gtk.MenuItem(label=_("Reload %s") % self.uuid)
+        menu.append(reload_option)
+        reload_option.connect("activate", self.reload_xlet)
+        reload_option.show()
+
         self.menu_button.set_popup(menu)
 
         scw = Gtk.ScrolledWindow()
-        scw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
         main_box.pack_start(scw, True, True, 0)
         self.instance_stack = Gtk.Stack()
         scw.add(self.instance_stack)
@@ -189,22 +260,56 @@ class MainWindow(object):
                 self.window.set_icon_from_file(icon_path)
         self.window.set_title(translate(self.uuid, self.xlet_meta["name"]))
 
+        def check_sizing(widget, data=None):
+            minreq, natreq = self.window.get_preferred_size()
+            monitor = Gdk.Display.get_default().get_monitor_at_window(self.window.get_window())
+
+            height = monitor.get_workarea().height
+            if natreq.height > height - 100:
+                self.window.resize(800, 600)
+                scw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
         self.window.connect("destroy", self.quit)
+        self.window.connect("realize", check_sizing)
         self.prev_button.connect("clicked", self.previous_instance)
         self.next_button.connect("clicked", self.next_instance)
 
     def load_instances(self):
         self.instance_info = []
         path = "%s/.cinnamon/configs/%s" % (home, self.uuid)
-        instances = sorted(os.listdir(path))
+        instances = 0
+        dir_items = sorted(os.listdir(path))
+        try:
+            multi_instance = int(self.xlet_meta["max-instances"]) != 1
+        except (KeyError, ValueError):
+            multi_instance = False
 
-        if len(instances) < 2:
-            self.prev_button.set_no_show_all(True)
-            self.next_button.set_no_show_all(True)
+        for item in dir_items:
+            # ignore anything that isn't json
+            if item[-5:] != ".json":
+                continue
 
-        for instance in instances:
-            instance_id = instance[0:-5]
-            settings = JSONSettingsHandler(os.path.join(path, instance), self.notify_dbus)
+            instance_id = item[0:-5]
+            if not multi_instance and instance_id != self.uuid:
+                continue # for single instance the file name should be [uuid].json
+
+            if multi_instance:
+                try:
+                    int(instance_id)
+                except:
+                    continue # multi-instance should have file names of the form [instance-id].json
+
+                instance_exists = False
+                enabled = self.gsettings.get_strv('enabled-%ss' % self.type)
+                for deninition in enabled:
+                    if uuid in deninition and instance_id in deninition.split(':'):
+                        instance_exists = True
+                        break
+
+                if not instance_exists:
+                    continue
+
+            settings = JSONSettingsHandler(os.path.join(path, item), self.notify_dbus)
             settings.instance_id = instance_id
             instance_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             self.instance_stack.add_named(instance_box, instance_id)
@@ -216,10 +321,10 @@ class MainWindow(object):
             first_key = next(iter(settings_map.values()))
 
             try:
-                for setting in settings_map.keys():
+                for setting in settings_map:
                     if setting == "__md5__":
                         continue
-                    for key in settings_map[setting].keys():
+                    for key in settings_map[setting]:
                         if key in ("description", "tooltip", "units"):
                             try:
                                 settings_map[setting][key] = translate(self.uuid, settings_map[setting][key])
@@ -228,13 +333,17 @@ class MainWindow(object):
                         elif key in "options":
                             new_opt_data = collections.OrderedDict()
                             opt_data = settings_map[setting][key]
-                            for option in opt_data.keys():
+                            for option in opt_data:
                                 if opt_data[option] == "custom":
                                     continue
                                 new_opt_data[translate(self.uuid, option)] = opt_data[option]
                             settings_map[setting][key] = new_opt_data
+                        elif key in "columns":
+                            columns_data = settings_map[setting][key]
+                            for column in columns_data:
+                                column["title"] = translate(self.uuid, column["title"])
             finally:
-                # if a layout is not expicitly defined, generate the settings
+                # if a layout is not explicitly defined, generate the settings
                 # widgets based on the order they occur
                 if first_key["type"] == "layout":
                     self.build_with_layout(settings_map, info, instance_box, first_key)
@@ -246,6 +355,12 @@ class MainWindow(object):
                     if "stack" in info:
                         self.stack_switcher.set_stack(info["stack"])
 
+            instances += 1
+
+        if instances < 2:
+            self.prev_button.set_no_show_all(True)
+            self.next_button.set_no_show_all(True)
+
     def build_with_layout(self, settings_map, info, box, first_key):
         layout = first_key
 
@@ -256,23 +371,47 @@ class MainWindow(object):
 
         for page_key in layout["pages"]:
             page_def = layout[page_key]
-            page = SettingsPage()
+            if page_def['type'] == 'custom':
+                page = self.create_custom_widget(page_def, info['settings'])
+                if page is None:
+                    continue
+                elif not isinstance(widget, SettingsPage):
+                    print('widget is not of type SettingsPage')
+                    continue
+            else:
+                page = SettingsPage()
+                for section_key in page_def["sections"]:
+                    section_def = layout[section_key]
+                    if 'dependency' in section_def:
+                        revealer = JSONSettingsRevealer(info['settings'], section_def['dependency'])
+                        section = page.add_reveal_section(translate(self.uuid, section_def["title"]), revealer=revealer)
+                    else:
+                        section = page.add_section(translate(self.uuid, section_def["title"]))
+                    for key in section_def["keys"]:
+                        item = settings_map[key]
+                        settings_type = item["type"]
+                        if settings_type == "button":
+                            widget = XLETSettingsButton(item, self.uuid, info["id"])
+                        elif settings_type == "label":
+                            widget = Text(translate(self.uuid, item["description"]))
+                        elif settings_type == 'custom':
+                            widget = self.create_custom_widget(item, key, info['settings'])
+                            if widget is None:
+                                continue
+                            elif not isinstance(widget, SettingsWidget):
+                                print('widget is not of type SettingsWidget')
+                                continue
+                        elif settings_type in XLET_SETTINGS_WIDGETS:
+                            widget = globals()[XLET_SETTINGS_WIDGETS[settings_type]](key, info["settings"], item)
+                        else:
+                            continue
+
+                        if 'dependency' in item:
+                            revealer = JSONSettingsRevealer(info['settings'], item['dependency'])
+                            section.add_reveal_row(widget, revealer=revealer)
+                        else:
+                            section.add_row(widget)
             page_stack.add_titled(page, page_key, translate(self.uuid, page_def["title"]))
-            for section_key in page_def["sections"]:
-                section_def = layout[section_key]
-                section = page.add_section(translate(self.uuid, section_def["title"]))
-                for key in section_def["keys"]:
-                    item = settings_map[key]
-                    settings_type = item["type"]
-                    if settings_type == "button":
-                        widget = XLETSettingsButton(item, self.uuid, info["id"])
-                        section.add_row(widget)
-                    elif settings_type == "label":
-                        widget = Text(translate(self.uuid, item["description"]))
-                        section.add_row(widget)
-                    elif settings_type in XLET_SETTINGS_WIDGETS:
-                        widget = globals()[XLET_SETTINGS_WIDGETS[settings_type]](key, info["settings"], item)
-                        section.add_row(widget)
 
     def build_from_order(self, settings_map, info, box, first_key):
         page = SettingsPage()
@@ -280,24 +419,61 @@ class MainWindow(object):
 
         # if the first key is not of type 'header' or type 'section' we need to make a new section
         if first_key["type"] not in ("header", "section"):
-            section = page.add_section("Settings for %s" % self.uuid)
+            section = page.add_section(_("Settings for %s") % self.uuid)
 
         for key, item in settings_map.items():
             if key == "__md5__":
                 continue
-            if "type" in item.keys():
+            if "type" in item:
                 settings_type = item["type"]
                 if settings_type in ("header", "section"):
-                    section = page.add_section(translate(self.uuid, item["description"]))
-                elif settings_type == "button":
+                    if 'dependency' in item:
+                        revealer = JSONSettingsRevealer(info['settings'], item['dependency'])
+                        section = page.add_reveal_section(translate(self.uuid, item["description"]), revealer=revealer)
+                    else:
+                        section = page.add_section(translate(self.uuid, item["description"]))
+                    continue
+
+                if settings_type == "button":
                     widget = XLETSettingsButton(item, self.uuid, info["id"])
-                    section.add_row(widget)
                 elif settings_type == "label":
                     widget = Text(translate(self.uuid, item["description"]))
-                    section.add_row(widget)
+                elif settings_type == 'custom':
+                    widget = self.create_custom_widget(item, key, info['settings'])
+                    if widget is None:
+                        continue
+                    elif not isinstance(widget, SettingsWidget):
+                        print('widget is not of type SettingsWidget')
+                        continue
                 elif settings_type in XLET_SETTINGS_WIDGETS:
                     widget = globals()[XLET_SETTINGS_WIDGETS[settings_type]](key, info["settings"], item)
+                else:
+                    continue
+
+                if 'dependency' in item:
+                    revealer = JSONSettingsRevealer(info['settings'], item['dependency'])
+                    section.add_reveal_row(widget, revealer=revealer)
+                else:
                     section.add_row(widget)
+
+    def create_custom_widget(self, info, *args):
+        file_name = info['file']
+        widget_name = info['widget']
+        file_path = os.path.join(find_extension_subdir(self.xlet_dir), file_name)
+
+        try:
+            if file_name not in self.custom_modules:
+                spec = importlib.util.spec_from_file_location(self.uuid.replace('@', '') + '.' + file_name.split('.')[0], file_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self.custom_modules[file_name] = module
+
+        except Exception as e:
+            traceback.print_exc()
+            print('problem loading custom widget')
+            return None
+
+        return getattr(self.custom_modules[file_name], widget_name)(info, *args)
 
     def notify_dbus(self, handler, key, value):
         proxy.updateSetting('(ssss)', self.uuid, handler.instance_id, key, json.dumps(value))
@@ -308,7 +484,10 @@ class MainWindow(object):
             self.stack_switcher.set_stack(info["stack"])
             children = info["stack"].get_children()
             if len(children) > 1:
-                info["stack"].set_visible_child(children[0])
+                if self.tab in range(len(children)):
+                    info["stack"].set_visible_child(children[self.tab])
+                else:
+                    info["stack"].set_visible_child(children[0])
         if proxy:
             proxy.highlightXlet('(ssb)', self.uuid, self.selected_instance["id"], False)
             proxy.highlightXlet('(ssb)', self.uuid, info["id"], True)
@@ -335,8 +514,8 @@ class MainWindow(object):
         dialog = Gtk.FileChooserDialog(_("Select or enter file to export to"),
                                        None,
                                        Gtk.FileChooserAction.SAVE,
-                                      (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                                       Gtk.STOCK_SAVE, Gtk.ResponseType.ACCEPT))
+                                       (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                                        Gtk.STOCK_SAVE, Gtk.ResponseType.ACCEPT))
         dialog.set_do_overwrite_confirmation(True)
         filter_text = Gtk.FileFilter()
         filter_text.add_pattern("*.json")
@@ -357,8 +536,8 @@ class MainWindow(object):
         dialog = Gtk.FileChooserDialog(_("Select a JSON file to import"),
                                        None,
                                        Gtk.FileChooserAction.OPEN,
-                                      (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                                       Gtk.STOCK_OPEN, Gtk.ResponseType.OK))
+                                       (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                                        Gtk.STOCK_OPEN, Gtk.ResponseType.OK))
         filter_text = Gtk.FileFilter()
         filter_text.add_pattern("*.json")
         filter_text.set_name(_("JSON files"))
@@ -375,6 +554,10 @@ class MainWindow(object):
     def reset(self, *args):
         self.selected_instance["settings"].reset_to_defaults()
 
+    def reload_xlet(self, *args):
+        if proxy:
+            proxy.ReloadXlet('(ss)', self.uuid, self.type.upper())
+
     def quit(self, *args):
         if proxy:
             proxy.highlightXlet('(ssb)', self.uuid, self.selected_instance["id"], False)
@@ -383,9 +566,10 @@ class MainWindow(object):
         Gtk.main_quit()
 
 if __name__ == "__main__":
+    setproctitle("xlet-settings")
     import signal
     if len(sys.argv) < 3:
-        print("Error: requres type and uuid")
+        print("Error: requires type and uuid")
         quit()
     xlet_type = sys.argv[1]
     if xlet_type not in ["applet", "desklet", "extension"]:

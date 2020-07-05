@@ -38,6 +38,9 @@ docs/reference/cinnamon-js/__pycache__/
 docs/reference/cinnamon-js/misc/
 docs/reference/cinnamon-js/ui/
 files/Makefile
+!files/Makefile.in
+files/usr/share/cinnamon-session/sessions/cinnamon.session
+files/usr/share/cinnamon-session/sessions/cinnamon2d.session
 gtk-doc.make
 js/Makefile
 js/Makefile.in
@@ -47,6 +50,7 @@ libtool
 m4/
 man/Makefile
 man/Makefile.in
+node_modules/
 po/Makefile
 po/Makefile.in.in
 po/Makevars.template
@@ -71,7 +75,6 @@ src/Makefile.in
 src/cinnamon
 src/cinnamon-enum-types.c
 src/cinnamon-enum-types.h
-src/cinnamon-extension-tool
 src/cinnamon-hotplug-sniffer
 src/cinnamon-marshal.c
 src/cinnamon-marshal.h
@@ -117,3 +120,17 @@ stamp-h1
 tests/Makefile
 tests/Makefile.in
 tests/run-test.sh
+/.vscode/
+/config.h.in~
+/debian/.debhelper/
+/debian/autoreconf.after
+/debian/autoreconf.before
+/debian/*.log
+/debian/*.substvars
+/debian/cinnamon-common/
+/debian/cinnamon-dbg/
+/debian/cinnamon-doc/
+/debian/cinnamon/
+/debian/files
+/debian/debhelper-build-stamp
+/debian/tmp/

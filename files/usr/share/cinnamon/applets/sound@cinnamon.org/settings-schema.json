@@ -15,6 +15,12 @@
         "dependency": "playerControl",
         "indent": true
     },
+    "keyOpen": {
+        "type": "keybinding",
+        "description": "Show menu",
+        "default": "<Shift><Super>s",
+        "tooltip" : "Set keybinding(s) to show the sound applet menu."
+    },
     "_knownPlayers": {
         "type": "generic",
         "default": ["banshee", "vlc", "rhythmbox"]
@@ -45,14 +51,28 @@
         "default": "mute",
         "options": {
             "Toggle Mute": "mute",
+            "Toggle Mute output": "out_mute",
+            "Toggle Mute input": "in_mute",
             "Toggle Play / Pause": "player"
         },
         "description": "Action on middle click"
+    },
+    "horizontalScroll": {
+        "type": "switch",
+        "default": false,
+        "description": "Use horizontal scrolling to move between tracks",
+        "dependency": "playerControl"
     },
     "showalbum": {
         "type": "switch",
         "default": false,
         "description": "Show album art as icon",
+        "dependency": "playerControl"
+    },
+    "keepAlbumAspectRatio": {
+        "type": "switch",
+        "default": true,
+        "description": "Keep album art aspect ratio",
         "dependency": "playerControl"
     },
     "hideSystray" : {

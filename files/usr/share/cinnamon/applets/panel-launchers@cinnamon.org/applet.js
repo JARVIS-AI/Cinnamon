@@ -1,6 +1,5 @@
 const Applet = imports.ui.applet;
 const AppletManager = imports.ui.appletManager;
-
 const Clutter = imports.gi.Clutter;
 const St = imports.gi.St;
 const Cinnamon = imports.gi.Cinnamon;
@@ -15,31 +14,19 @@ const Tweener = imports.ui.tweener;
 const Util = imports.misc.util;
 const Settings = imports.ui.settings;
 const Signals = imports.signals;
-
-const DEFAULT_ICON_SIZE = 20;
-const DEFAULT_ANIM_SIZE = 13;
-const ICON_HEIGHT_FACTOR = .8;
-const ICON_ANIM_FACTOR = .65;
+const SignalManager = imports.misc.signalManager;
 
 const PANEL_EDIT_MODE_KEY = 'panel-edit-mode';
 const PANEL_LAUNCHERS_KEY = 'panel-launchers';
-const PANEL_LAUNCHERS_DRAGGABLE_KEY = 'panel-launchers-draggable';
 
 const CUSTOM_LAUNCHERS_PATH = GLib.get_home_dir() + '/.cinnamon/panel-launchers';
 
 let pressLauncher = null;
 
-function PanelAppLauncherMenu(launcher, orientation) {
-    this._init(launcher, orientation);
-}
-
-PanelAppLauncherMenu.prototype = {
-    __proto__: Applet.AppletPopupMenu.prototype,
-
-    _init: function(launcher, orientation) {
+class PanelAppLauncherMenu extends Applet.AppletPopupMenu {
+    constructor(launcher, orientation) {
+        super(launcher, orientation);
         this._launcher = launcher;
-
-        Applet.AppletPopupMenu.prototype._init.call(this, launcher, orientation);
 
         let appinfo = this._launcher.getAppInfo();
 
@@ -53,80 +40,80 @@ PanelAppLauncherMenu.prototype = {
             this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         }
 
-        let subMenu = new PopupMenu.PopupSubMenuMenuItem(_("Options"));
-        this.addMenuItem(subMenu);
-
         let item = new PopupMenu.PopupIconMenuItem(_("Launch"), "media-playback-start", St.IconType.SYMBOLIC);
-        item.connect('activate', Lang.bind(this, this._onLaunchActivate));
-        subMenu.menu.addMenuItem(item);
+        this._signals.connect(item, 'activate', Lang.bind(this, this._onLaunchActivate));
+        this.addMenuItem(item);
+
+        if (Main.gpu_offload_supported) {
+            let item = new PopupMenu.PopupIconMenuItem(_("Run with NVIDIA GPU"), "cpu", St.IconType.SYMBOLIC);
+            this._signals.connect(item, 'activate', Lang.bind(this, this._onLaunchOffloadedActivate));
+            this.addMenuItem(item);
+        }
 
         item = new PopupMenu.PopupIconMenuItem(_("Add"), "list-add", St.IconType.SYMBOLIC);
-        item.connect('activate', Lang.bind(this, this._onAddActivate));
-        subMenu.menu.addMenuItem(item);
+        this._signals.connect(item, 'activate', Lang.bind(this, this._onAddActivate));
+        this.addMenuItem(item);
 
         item = new PopupMenu.PopupIconMenuItem(_("Edit"), "document-properties", St.IconType.SYMBOLIC);
-        item.connect('activate', Lang.bind(this, this._onEditActivate));
-        subMenu.menu.addMenuItem(item);
+        this._signals.connect(item, 'activate', Lang.bind(this, this._onEditActivate));
+        this.addMenuItem(item);
 
         item = new PopupMenu.PopupIconMenuItem(_("Remove"), "window-close", St.IconType.SYMBOLIC);
-        item.connect('activate', Lang.bind(this, this._onRemoveActivate));
-        subMenu.menu.addMenuItem(item);
+        this._signals.connect(item, 'activate', Lang.bind(this, this._onRemoveActivate));
+        this.addMenuItem(item);
 
-        subMenu = new PopupMenu.PopupSubMenuMenuItem(_("Preferences"));
+        this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        let subMenu = new PopupMenu.PopupSubMenuMenuItem(_("Preferences"));
         this.addMenuItem(subMenu);
 
         item = new PopupMenu.PopupIconMenuItem(_("About..."), "dialog-question", St.IconType.SYMBOLIC);
-        item.connect('activate', Lang.bind(this._launcher._applet, this._launcher._applet.openAbout));
+        this._signals.connect(item, 'activate', Lang.bind(this._launcher.launchersBox, this._launcher.launchersBox.openAbout));
         subMenu.menu.addMenuItem(item);
 
         item = new PopupMenu.PopupIconMenuItem(_("Configure..."), "system-run", St.IconType.SYMBOLIC);
-        item.connect('activate', Lang.bind(this._launcher._applet, this._launcher._applet.configureApplet));
+        this._signals.connect(item, 'activate', Lang.bind(this._launcher.launchersBox, this._launcher.launchersBox.configureApplet));
         subMenu.menu.addMenuItem(item);
 
-        item = new PopupMenu.PopupIconMenuItem(_("Remove 'Panel launchers'"), "edit-delete", St.IconType.SYMBOLIC);
-        item.connect('activate', Lang.bind(this, function() {
-            AppletManager._removeAppletFromPanel(this._launcher._applet._uuid, this._launcher._applet.instance_id);
-        }));
-        subMenu.menu.addMenuItem(item);
-    },
+        this.remove_item = new PopupMenu.PopupIconMenuItem(_("Remove '%s'").format(_("Panel launchers")), "edit-delete", St.IconType.SYMBOLIC);
+        subMenu.menu.addMenuItem(this.remove_item);
+    }
 
-    _onLaunchActivate: function(item, event) {
+    _onLaunchActivate(item, event) {
         this._launcher.launch();
-    },
+    }
 
-    _onRemoveActivate: function(item, event) {
+    _onLaunchOffloadedActivate(item, event) {
+        this._launcher.launch(true);
+    }
+
+    _onRemoveActivate(item, event) {
         this.close();
         this._launcher.launchersBox.removeLauncher(this._launcher, this._launcher.isCustom());
-        this._launcher.actor.destroy();
-    },
+    }
 
-    _onAddActivate: function(item, event) {
+    _onAddActivate(item, event) {
         this._launcher.launchersBox.showAddLauncherDialog(event.get_time());
-    },
+    }
 
-    _onEditActivate: function(item, event) {
+    _onEditActivate(item, event) {
         this._launcher.launchersBox.showAddLauncherDialog(event.get_time(), this._launcher);
-    },
+    }
 
-    _launchAction: function(event, name) {
+    _launchAction(event, name) {
         this._launcher.launchAction(name);
     }
 }
 
-function PanelAppLauncher(launchersBox, app, appinfo, orientation, panel_height, scale) {
-    this._init(launchersBox, app, appinfo, orientation, panel_height, scale);
-}
-
-PanelAppLauncher.prototype = {
-    __proto__: DND.LauncherDraggable.prototype,
-
-    _init: function(launchersBox, app, appinfo, orientation, panel_height, scale) {
-        DND.LauncherDraggable.prototype._init.call(this);
+class PanelAppLauncher extends DND.LauncherDraggable {
+    constructor(launchersBox, app, appinfo, orientation, icon_size) {
+        super(launchersBox);
         this.app = app;
         this.appinfo = appinfo;
-        this.launchersBox = launchersBox;
-        this._applet = launchersBox;
         this.orientation = orientation;
+        this.icon_size = icon_size;
+
+        this._signals = new SignalManager.SignalManager(null);
 
         this.actor = new St.Bin({ style_class: 'launcher',
                                   important: true,
@@ -136,31 +123,31 @@ PanelAppLauncher.prototype = {
                                   y_fill: true,
                                   track_hover: true });
 
+        this.actor.set_easing_mode(Clutter.AnimationMode.EASE_IN_QUAD);
+        this.actor.set_easing_duration(100);
+
         this.actor._delegate = this;
-        this.actor.connect('button-release-event', Lang.bind(this, this._onButtonRelease));
-        this.actor.connect('button-press-event', Lang.bind(this, this._onButtonPress));
+        this._signals.connect(this.actor, 'button-release-event', Lang.bind(this, this._onButtonRelease));
+        this._signals.connect(this.actor, 'button-press-event', Lang.bind(this, this._onButtonPress));
 
         this._iconBox = new St.Bin({ style_class: 'icon-box',
                                      important: true });
-        this._iconBox.connect('style-changed',
-                              Lang.bind(this, this._onIconBoxStyleChanged));
-        this._iconBox.connect('notify::allocation',
-                              Lang.bind(this, this._updateIconBoxClip));
+
         this.actor.add_actor(this._iconBox);
         this._iconBottomClip = 0;
 
-        if (scale) {
-            this.icon_height = Math.floor((panel_height * ICON_HEIGHT_FACTOR) / global.ui_scale);
-            this.icon_anim_height = Math.floor((panel_height * ICON_ANIM_FACTOR) / global.ui_scale);
-        } else {
-            this.icon_height = DEFAULT_ICON_SIZE;
-            this.icon_anim_height = DEFAULT_ANIM_SIZE;
-        }
         this.icon = this._getIconActor();
         this._iconBox.set_child(this.icon);
 
+        this._signals.connect(this._iconBox, 'style-changed',
+                              Lang.bind(this, this._updateIconSize));
+        this._signals.connect(this._iconBox, 'notify::allocation',
+                              Lang.bind(this, this._updateIconSize));
+
         this._menuManager = new PopupMenu.PopupMenuManager(this);
         this._menu = new PanelAppLauncherMenu(this, orientation);
+        this._signals.connect(this._menu.remove_item, 'activate', (actor, event) => launchersBox.confirmRemoveApplet(event));
+
         this._menuManager.addMenu(this._menu);
 
         let tooltipText = this.isCustom() ? appinfo.get_name() : app.get_name();
@@ -169,114 +156,119 @@ PanelAppLauncher.prototype = {
         this._dragging = false;
         this._draggable = DND.makeDraggable(this.actor);
 
-        this._draggable.connect('drag-begin', Lang.bind(this, this._onDragBegin));
-        this._draggable.connect('drag-cancelled', Lang.bind(this, this._onDragCancelled));
-        this._draggable.connect('drag-end', Lang.bind(this, this._onDragEnd));
+        this._signals.connect(this._draggable, 'drag-begin', Lang.bind(this, this._onDragBegin));
+        this._signals.connect(this._draggable, 'drag-end', Lang.bind(this, this._onDragEnd));
 
-        this._draggable.inhibit = !this.launchersBox.allowDragging || global.settings.get_boolean(PANEL_EDIT_MODE_KEY);
-        this.launchersBox.connect("launcher-draggable-setting-changed", Lang.bind(this, this._updateInhibit));
-        global.settings.connect('changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._updateInhibit));
-    },
+        this._updateInhibit();
+        this._signals.connect(this.launchersBox, 'launcher-draggable-setting-changed', Lang.bind(this, this._updateInhibit));
+        this._signals.connect(global.settings, 'changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._updateInhibit));
+    }
 
-    _onDragBegin: function() {
+    _onDragBegin() {
         this._dragging = true;
         this._tooltip.hide();
         this._tooltip.preventShow = true;
-    },
+        this.actor.set_hover(false);
+    }
 
-    _onDragEnd: function() {
+    _onDragEnd(source, time, success) {
         this._dragging = false;
         this._tooltip.preventShow = false;
-        this._applet._clearDragPlaceholder();
-    },
+        this.actor.sync_hover();
+        if (!success)
+            this.launchersBox._clearDragPlaceholder();
+    }
 
-    _onDragCancelled: function() {
-        this._dragging = false;
-        this._tooltip.preventShow = false;
-    },
+    _updateInhibit() {
+        let editMode = global.settings.get_boolean(PANEL_EDIT_MODE_KEY);
+        this._draggable.inhibit = !this.launchersBox.allowDragging || editMode;
+        this.actor.reactive = !editMode;
+    }
 
-    _updateInhibit: function(){
-        this._draggable.inhibit = !this.launchersBox.allowDragging || global.settings.get_boolean(PANEL_EDIT_MODE_KEY);
-    },
-
-    getDragActor: function() {
+    getDragActor() {
         return this._getIconActor();
-    },
+    }
 
     // Returns the original actor that should align with the actor
     // we show as the item is being dragged.
-    getDragActorSource: function() {
+    getDragActorSource() {
         return this.icon;
-    },
+    }
 
-    _getIconActor: function() {
+    _getIconActor() {
         if (this.isCustom()) {
             let icon = this.appinfo.get_icon();
             if (icon == null)
                 icon = new Gio.ThemedIcon({name: "gnome-panel-launcher"});
-            return St.TextureCache.get_default().load_gicon(null, icon, this.icon_height);
+            return new St.Icon({gicon: icon, icon_size: this.icon_size, icon_type: St.IconType.FULLCOLOR});
         } else {
-            return this.app.create_icon_texture(this.icon_height);
+            return this.app.create_icon_texture(this.icon_size);
         }
-    },
+    }
 
-    _animateIcon: function(step){
+    _animateIcon(step) {
         if (step >= 3) return;
+        this.icon.set_pivot_point(0.5, 0.5);
         Tweener.addTween(this.icon,
-                         { width: this.icon_anim_height * global.ui_scale,
-                           height: this.icon_anim_height * global.ui_scale,
+                         { scale_x: 0.7,
+                           scale_y: 0.7,
                            time: 0.2,
                            transition: 'easeOutQuad',
-                           onComplete: function(){
+                           onComplete() {
                                Tweener.addTween(this.icon,
-                                                { width: this.icon_height * global.ui_scale,
-                                                  height: this.icon_height * global.ui_scale,
+                                                { scale_x: 1.0,
+                                                  scale_y: 1.0,
                                                   time: 0.2,
                                                   transition: 'easeOutQuad',
-                                                  onComplete: function(){
-                                                      this._animateIcon(step+1);
+                                                  onComplete() {
+                                                      this._animateIcon(step + 1);
                                                   },
                                                   onCompleteScope: this
                                                 });
                            },
                            onCompleteScope: this
                          });
-    },
+    }
 
-    launch: function() {
-        let allocation = this._iconBox.get_allocation_box();
-        this._iconBox.width = allocation.x2 - allocation.x1;
-        this._iconBox.height = allocation.y2 - allocation.y1;
+    launch(offload=false) {
+        if (this.isCustom()) {
+            this.appinfo.launch([], null);
+        } else {
+            if (offload) {
+                try {
+                    this.app.launch_offloaded(0, [], -1);
+                } catch (e) {
+                    logError(e, "Could not launch app with dedicated gpu: ");
+                }
+            } else {
+                this.app.open_new_window(-1);
+            }
+        }
         this._animateIcon(0);
-        if (this.isCustom()) this.appinfo.launch([], null);
-        else this.app.open_new_window(-1);
-    },
+    }
 
-    launchAction: function(name) {
-        let allocation = this._iconBox.get_allocation_box();
-        this._iconBox.width = allocation.x2 - allocation.x1;
-        this._iconBox.height = allocation.y2 - allocation.y1;
-        this._animateIcon(0);
+    launchAction(name) {
         this.getAppInfo().launch_action(name, null);
-    },
+        this._animateIcon(0);
+    }
 
-    getId: function() {
+    getId() {
         if (this.isCustom()) return Gio.file_new_for_path(this.appinfo.get_filename()).get_basename();
         else return this.app.get_id();
-    },
+    }
 
-    isCustom: function() {
+    isCustom() {
         return (this.app==null);
-    },
+    }
 
-    _onButtonPress: function(actor, event) {
+    _onButtonPress(actor, event) {
         pressLauncher = this.getAppname();
 
         if (event.get_button() == 3)
             this._menu.toggle();
-    },
+    }
 
-    _onButtonRelease: function(actor, event) {
+    _onButtonRelease(actor, event) {
         if (pressLauncher == this.getAppname()){
             let button = event.get_button();
             if (button==1) {
@@ -284,35 +276,32 @@ PanelAppLauncher.prototype = {
                 else this.launch();
             }
         }
-    },
+    }
 
-    _onIconBoxStyleChanged: function() {
+    _updateIconSize() {
         let node = this._iconBox.get_theme_node();
-        this._iconBottomClip = node.get_length('panel-launcher-bottom-clip');
-        this._updateIconBoxClip();
-    },
+        let maxHeight = this._iconBox.height - node.get_vertical_padding();
+        let maxWidth = this._iconBox.width - node.get_horizontal_padding();
+        let smallestDim = Math.min(maxHeight, maxWidth) / global.ui_scale;
 
-    _updateIconBoxClip: function() {
-        let allocation = this._iconBox.allocation;
-        if (this._iconBottomClip > 0)
-            this._iconBox.set_clip(0, 0, allocation.x2 - allocation.x1, allocation.y2 - allocation.y1 - this._iconBottomClip);
-        else
-            this._iconBox.remove_clip();
-    },
+        if (smallestDim < this.icon.get_icon_size()) {
+            this.icon.set_icon_size(smallestDim);
+        }
+    }
 
-    getAppInfo: function() {
+    getAppInfo() {
         return (this.isCustom() ? this.appinfo : this.app.get_app_info());
-    },
+    }
 
-    getCommand: function() {
+    getCommand() {
         return this.getAppInfo().get_commandline();
-    },
+    }
 
-    getAppname: function() {
+    getAppname() {
         return this.getAppInfo().get_name();
-    },
+    }
 
-    getIcon: function() {
+    getIcon() {
         let icon = this.getAppInfo().get_icon();
         if (icon) {
             if (icon instanceof Gio.FileIcon) {
@@ -324,37 +313,179 @@ PanelAppLauncher.prototype = {
         }
         return null;
     }
+
+    destroy() {
+        this._signals.disconnectAllSignals();
+        this._menu.destroy();
+        this._menuManager.destroy();
+        this.actor.destroy();
+    }
 }
 
-function MyApplet(metadata, orientation, panel_height, instance_id) {
-    this._init(metadata, orientation, panel_height, instance_id);
+// holds launchers and contains DND functionality, instead of the
+// applet actor handling DND so that we don't have to apply extra
+// transformations to do hit testing. dnd methods get event coords
+// pre-transformed to be actor-relative.
+class LaunchersBox {
+    constructor(applet) {
+        this.actor = new St.BoxLayout({ style_class: 'panel-launchers', important: true });
+        this.actor._delegate = this;
+        this.actor.connect("destroy", () => this._destroy());
+
+        this.applet = applet;
+        this._dragAnimating = false;
+        this._dragPlaceholder = null;
+        this._dragTargetIndex = null;
+        this._dragLocalOriginInfo = null;
+    }
+
+    _createDragPlaceholder(index, skipAnimation=false) {
+        if (this._dragPlaceholder)
+            return;
+
+        let vertical = this.applet.orientation == St.Side.LEFT || this.applet.orientation == St.Side.RIGHT;
+        this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
+        let placeholderSize = vertical ? [1, this.applet.icon_size] : [this.applet.icon_size, 1];
+        this._dragPlaceholder.child.set_size(...placeholderSize);
+        this.actor.insert_child_at_index(this._dragPlaceholder.actor, index);
+
+        if (!skipAnimation) {
+            this._dragAnimating = true;
+            this._dragPlaceholder.animateIn(() => this._dragAnimating = false);
+        }
+    }
+
+    // this resets drag placeholder and local drag state but is also used by DND so we can't rename it
+    _clearDragPlaceholder(skipAnimation=false) {
+        if (this._dragLocalOriginInfo != null) {
+            this.actor.set_child_at_index(this._dragLocalOriginInfo.actor, this._dragLocalOriginInfo.index);
+        }
+
+        if (this._dragPlaceholder) {
+            if (skipAnimation) {
+                this._dragPlaceholder.actor.destroy();
+            } else {
+                this._dragAnimating = true;
+                this._dragPlaceholder.animateOutAndDestroy(() => this._dragAnimating = false);
+            }
+        }
+
+        this._dragPlaceholder = null;
+        this._dragLocalOriginInfo = null;
+        this._dragTargetIndex = null;
+    }
+
+    handleDragOver(source, actor, x, y, time) {
+        let isLauncher = source instanceof DND.LauncherDraggable;
+        // don't present drop if the source isn't an app/launcher type, or if a drag hover
+        // was just cancelled and we are still animating out a placeholder
+        if (!(source.isDraggableApp || isLauncher) ||
+            (!this._dragPlaceholder && this._dragAnimating)) {
+            return DND.DragMotionResult.NO_DROP;
+        }
+
+        let originalIndex = this.applet._launchers.indexOf(source);
+
+        let vertical = this.applet.orientation == St.Side.LEFT || this.applet.orientation == St.Side.RIGHT;
+        let boxSize = vertical ? this.actor.height : this.actor.width;
+        let mPos = vertical ? y : x;
+        let children = this.actor.get_children();
+        let dropIndex = Math.round(mPos / boxSize * children.length);
+
+        // -1 is end, 0 is start
+        if (dropIndex >= children.length)
+            dropIndex = -1;
+        else if (dropIndex < -1)
+            dropIndex = 0;
+
+        if (this._dragTargetIndex != dropIndex) {
+            if (originalIndex > -1) {
+                // local drag without placeholder
+                if (!this._dragLocalOriginInfo)
+                    this._dragLocalOriginInfo = { actor: source.actor, index: originalIndex };
+                this.actor.set_child_at_index(source.actor, dropIndex);
+                this._dragTargetIndex = dropIndex;
+            } else if (!this._dragAnimating) {
+                // if we are already showing a placeholder (animate in) we don't update and
+                // just return the correct DragMotionType, otherwise we create/set position
+                if (!this._dragPlaceholder) {
+                    // animates in a new placeholder
+                    this._createDragPlaceholder(dropIndex);
+                } else {
+                    this.actor.set_child_at_index(this._dragPlaceholder.actor, dropIndex);
+                }
+                this._dragTargetIndex = dropIndex;
+            }
+        }
+
+        if (isLauncher)
+            return DND.DragMotionResult.MOVE_DROP;
+
+        return DND.DragMotionResult.COPY_DROP;
+    }
+
+    handleDragOut() {
+        this._clearDragPlaceholder();
+    }
+
+    acceptDrop(source, actor, x, y, time) {
+        let isLauncher = source instanceof DND.LauncherDraggable;
+        if (this._dragTargetIndex == null || !(source.isDraggableApp || isLauncher)) {
+            // this _should_ be a no-drop-eligibility case only with no existing state, but just in
+            this._clearDragPlaceholder(true);
+            return false;
+        }
+
+        let dropIndex = this._dragTargetIndex;
+        this._clearDragPlaceholder(true);
+
+        if (this.applet._launchers.indexOf(source) != -1) {
+            this.applet._reinsertAtIndex(source, dropIndex);
+        } else {
+            let sourceId;
+            if (isLauncher) {
+                sourceId = source.getId();
+                source.launchersBox.removeLauncher(source, false);
+            } else {
+                sourceId = source.get_app_id();
+            }
+            this.applet.addForeignLauncher(sourceId, dropIndex, source);
+        }
+
+        actor.destroy();
+        return true;
+    }
+
+    _destroy() {
+        this.actor._delegate = null;
+        this.actor = null;
+        this.applet = null;
+    }
 }
 
-MyApplet.prototype = {
-    __proto__: Applet.Applet.prototype,
-
-    _init: function(metadata, orientation, panel_height, instance_id) {
-        Applet.Applet.prototype._init.call(this, orientation, panel_height, instance_id);
+class CinnamonPanelLaunchersApplet extends Applet.Applet {
+    constructor(metadata, orientation, panel_height, instance_id) {
+        super(orientation, panel_height, instance_id);
         this.actor.set_track_hover(false);
 
         this.setAllowedLayout(Applet.AllowedLayout.BOTH);
 
         this.orientation = orientation;
-        this._dragPlaceholder = null;
-        this._dragPlaceholderPos = -1;
-        this._animatingPlaceholdersCount = 0;
+        this.icon_size = this.getPanelIconSize(St.IconType.FULLCOLOR);
 
-        this.myactor = new St.BoxLayout({ style_class: 'panel-launchers',
-                                          important: true });
+        // LaunchersBox() handles DND. This would be cleaner as a BoxLayout class but
+        // would also add pointless overhead.
+        this.launchersBox = new LaunchersBox(this);
+        this.myactor = this.launchersBox.actor;
 
         this.settings = new Settings.AppletSettings(this, metadata.uuid, instance_id);
-        this.settings.bind("launcherList", "launcherList", this._onSettingsChanged);
+        this.settings.bind("launcherList", "launcherList", this._reload);
         this.settings.bind("allow-dragging", "allowDragging", this._updateLauncherDrag);
 
         this.uuid = metadata.uuid;
 
-        this._settings_proxy = new Array();
-        this._launchers = new Array();
+        this._settings_proxy = [];
+        this._launchers = [];
 
         this.actor.add(this.myactor);
         this.actor.reactive = global.settings.get_boolean(PANEL_EDIT_MODE_KEY);
@@ -363,36 +494,33 @@ MyApplet.prototype = {
         this.do_gsettings_import();
 
         this.on_orientation_changed(orientation);
+    }
 
-        St.TextureCache.get_default().connect("icon-theme-changed", Lang.bind(this, this.reload));
-    },
-
-    _updateLauncherDrag: function() {
+    _updateLauncherDrag() {
         this.emit("launcher-draggable-setting-changed");
-    },
+    }
 
-    do_gsettings_import: function() {
+    do_gsettings_import() {
         let old_launchers = global.settings.get_strv(PANEL_LAUNCHERS_KEY);
         if (old_launchers.length >= 1 && old_launchers[0] != "DEPRECATED") {
             this.launcherList = old_launchers;
         }
 
         global.settings.set_strv(PANEL_LAUNCHERS_KEY, ["DEPRECATED"]);
-    },
+    }
 
-    _onPanelEditModeChanged: function() {
+    _onPanelEditModeChanged() {
         this.actor.reactive = global.settings.get_boolean(PANEL_EDIT_MODE_KEY);
-    },
+    }
 
-    _onSettingsChanged: function() {
-        this.reload();
-    },
-
-    sync_settings_proxy_to_settings: function() {
+    sync_settings_proxy_to_settings() {
+        this.settings.unbind("launcherList");
         this.launcherList = this._settings_proxy.map(x => x.file);
-    },
+        this.settings.setValue("launcherList", this.launcherList);
+        this.settings.bind("launcherList", "launcherList", this._reload);
+    }
 
-    _remove_launcher_from_proxy: function(visible_index) {
+    _remove_launcher_from_proxy(visible_index) {
         let j = -1;
         for (let i = 0; i < this._settings_proxy.length; i++) {
             if (this._settings_proxy[i].valid) {
@@ -403,11 +531,10 @@ MyApplet.prototype = {
                 }
             }
         }
-    },
+    }
 
-    _move_launcher_in_proxy: function(launcher, new_index) {
+    _move_launcher_in_proxy(launcher, new_index) {
         let proxy_member;
-
         for (let i = 0; i < this._settings_proxy.length; i++) {
             if (this._settings_proxy[i].launcher == launcher) {
                 proxy_member = this._settings_proxy.splice(i, 1)[0];
@@ -418,35 +545,55 @@ MyApplet.prototype = {
         if (!proxy_member)
             return;
 
+        this._insert_proxy_member(proxy_member, new_index);
+    }
+
+    _insert_proxy_member(member, visible_index) {
+        if (visible_index == -1) {
+            this._settings_proxy.push(member);
+            return;
+        }
+
         let j = -1;
         for (let i = 0; i < this._settings_proxy.length; i++) {
             if (this._settings_proxy[i].valid) {
                 j++;
-                if (j == new_index) {
-                    this._settings_proxy.splice(i, 0, proxy_member);
+                if (j == visible_index) {
+                    this._settings_proxy.splice(i, 0, member);
                     return;
                 }
             }
         }
 
-        if (new_index == j + 1)
-            this._settings_proxy.push(proxy_member);
-    },
+        if (visible_index == j + 1)
+            this._settings_proxy.push(member);
+    }
 
-    loadSingleApp: function(path) {
+    _loadLauncher(path) {
         let appSys = Cinnamon.AppSystem.get_default();
         let app = appSys.lookup_app(path);
         let appinfo = null;
-        if (!app)
+        if (!app) {
             appinfo = Gio.DesktopAppInfo.new_from_filename(CUSTOM_LAUNCHERS_PATH+"/"+path);
-        return [app, appinfo]
-    },
+            if (!appinfo) {
+                global.logWarning(`Failed to add launcher from path: ${path}`);
+                return null;
+            }
+        }
+        return new PanelAppLauncher(this, app, appinfo, this.orientation, this.icon_size);
+    }
 
-    on_panel_height_changed: function() {
-        this.reload();
-    },
+    on_panel_height_changed() {
+        this.icon_size = this.getPanelIconSize(St.IconType.FULLCOLOR);
+        this._reload();
+    }
 
-    on_orientation_changed: function(neworientation) {
+    on_panel_icon_size_changed(size) {
+        this.icon_size = size;
+        this._reload();
+    }
+
+    on_orientation_changed(neworientation) {
         this.orientation = neworientation;
         if (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM) {
             this.myactor.remove_style_class_name('vertical');
@@ -459,35 +606,32 @@ MyApplet.prototype = {
             this.myactor.set_x_expand(true);
             this.myactor.set_y_expand(false);
         }
-        this.reload();
-    },
+        this._reload();
+    }
 
-    reload: function() {
-        this.myactor.destroy_all_children();
-        this._launchers = new Array();
-        this._settings_proxy = new Array();
+    _reload() {
+        this._launchers.forEach(l => l.destroy());
+        this._launchers = [];
+        this._settings_proxy = [];
 
         for (let file of this.launcherList) {
-            let [app, appinfo] = this.loadSingleApp(file);
-
-            if (app || appinfo) {
-                let launcher = new PanelAppLauncher(this, app, appinfo,
-                        this.orientation, this._panelHeight, this._scaleMode);
+            let launcher = this._loadLauncher(file);
+            let proxyObj = { file: file, valid: false, launcher: null };
+            if (launcher) {
                 this.myactor.add(launcher.actor);
                 this._launchers.push(launcher);
-
-                this._settings_proxy.push({ file: file, valid: true, launcher: launcher });
-            } else {
-                this._settings_proxy.push({ file: file, valid: false });
+                proxyObj.valid = true;
+                proxyObj.launcher = launcher;
             }
+            this._settings_proxy.push(proxyObj);
         }
 
-    },
+    }
 
-    removeLauncher: function(launcher, delete_file) {
+    removeLauncher(launcher, delete_file) {
         let i = this._launchers.indexOf(launcher);
         if (i >= 0) {
-            launcher.actor.destroy();
+            launcher.destroy();
             this._launchers.splice(i, 1);
             this._remove_launcher_from_proxy(i);
         }
@@ -498,175 +642,52 @@ MyApplet.prototype = {
         }
 
         this.sync_settings_proxy_to_settings();
-    },
+    }
 
-    getDummyLauncher: function(path) {
-        let [app, appinfo] = this.loadSingleApp(path);
-        let dummy;
-        if (app || appinfo) {
-            dummy = new PanelAppLauncher(this, app, appinfo, this.orientation, this._panelHeight);
-        }
+    acceptNewLauncher(path) {
+        this.addForeignLauncher(path, -1);
+    }
 
-        if (dummy && dummy.actor)
-            return dummy.actor;
-        else
-            return null;
-    },
+    addForeignLauncher(path, position) {
+        let newLauncher = this._loadLauncher(path);
+        if (!newLauncher)
+            return;
 
-    acceptNewLauncher: function(path) {
-        this.myactor.add(this.getDummyLauncher(path));
-        let launchers = this.launcherList;
-        launchers.push(path);
-        this.launcherList = launchers;
-        this.reload();
-    },
-
-    addForeignLauncher: function(path, position, source) {
-        this.myactor.insert_child_at_index(this.getDummyLauncher(path), position);
-        this._settings_proxy.splice(position, 0, { file: path, valid: true });
+        this.myactor.insert_child_at_index(newLauncher.actor, position);
+        this._launchers.splice(position, 0, newLauncher);
+        this._insert_proxy_member({ file: path, valid: true, launcher: newLauncher }, position);
         this.sync_settings_proxy_to_settings();
-    },
+    }
 
-    moveLauncher: function(launcher, pos) {
-        let origpos = this._launchers.indexOf(launcher);
-        if (origpos >= 0) {
-            launcher.actor.destroy();
-            this.myactor.insert_child_at_index(this.getDummyLauncher(launcher.getId()), pos);
-            this._launchers.splice(origpos, 1);
-            this._move_launcher_in_proxy(launcher, pos);
-            this.sync_settings_proxy_to_settings();
-            this.reload(); // overkill really, but a way of getting the scaled size right
-        }
-    },
-
-    showAddLauncherDialog: function(timestamp, launcher){
+    showAddLauncherDialog(timestamp, launcher){
         if (launcher) {
             Util.spawnCommandLine("cinnamon-desktop-editor -mcinnamon-launcher -f" + launcher.getId() + " " + this.settings.file.get_path());
         } else {
             Util.spawnCommandLine("cinnamon-desktop-editor -mcinnamon-launcher " + this.settings.file.get_path());
         }
-    },
-
-    _clearDragPlaceholder: function() {
-        if (this._dragPlaceholder) {
-            this._dragPlaceholder.animateOutAndDestroy();
-            this._dragPlaceholder = null;
-            this._dragPlaceholderPos = -1;
-        }
-    },
-
-    handleDragOver: function(source, actor, x, y, time) {
-        if (!(source.isDraggableApp || (source instanceof DND.LauncherDraggable))) return DND.DragMotionResult.NO_DROP;
-        let children = this.myactor.get_children();
-        let numChildren = children.length;
-        let boxWidth;
-        let vertical = false;
-
-        if (this.myactor.height > this.myactor.width) {  // assume oriented vertically
-            vertical = true;
-            boxWidth = this.myactor.height;
-
-            if (this._dragPlaceholder) {
-                boxWidth -= this._dragPlaceholder.actor.height;
-                numChildren--;
-            }
-        } else {
-            boxWidth = this.myactor.width;
-
-            if (this._dragPlaceholder) {
-                boxWidth -= this._dragPlaceholder.actor.width;
-                numChildren--;
-            }
-        }
-
-        let launcherPos = this._launchers.indexOf(source);
-        let pos;
-
-        if (vertical)
-            pos = Math.round(y * numChildren / boxWidth);
-        else
-            pos = Math.round(x * numChildren / boxWidth);
-
-        if (pos != this._dragPlaceholderPos && pos <= numChildren) {
-            if (this._animatingPlaceholdersCount > 0) {
-                let launchersChildren = children.filter(function(actor) {
-                    return actor._delegate instanceof DND.LauncherDraggable;
-                });
-                this._dragPlaceholderPos = children.indexOf(launchersChildren[pos]);
-            } else {
-                this._dragPlaceholderPos = pos;
-            }
-
-            // Don't allow positioning before or after self
-            if (launcherPos != -1 && pos == launcherPos) {
-                if (this._dragPlaceholder) {
-                    this._dragPlaceholder.animateOutAndDestroy();
-                    this._animatingPlaceholdersCount++;
-                    this._dragPlaceholder.actor.connect('destroy',
-                        Lang.bind(this, function() {
-                        this._animatingPlaceholdersCount--;
-                        }));
-                }
-                this._dragPlaceholder = null;
-
-                return DND.DragMotionResult.CONTINUE;
-            }
-
-            // If the placeholder already exists, we just move
-            // it, but if we are adding it, expand its size in
-            // an animation
-            let fadeIn;
-            if (this._dragPlaceholder) {
-                this._dragPlaceholder.actor.destroy();
-                fadeIn = false;
-            } else {
-                fadeIn = true;
-            }
-
-            this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
-            this._dragPlaceholder.child.set_width (20);
-            this._dragPlaceholder.child.set_height (10);
-            this.myactor.insert_child_at_index(this._dragPlaceholder.actor,
-                                   this._dragPlaceholderPos);
-            if (fadeIn) this._dragPlaceholder.animateIn();
-        }
-
-        return DND.DragMotionResult.MOVE_DROP;
-    },
-
-    acceptDrop: function(source, actor, x, y, time) {
-        if (!(source.isDraggableApp || (source instanceof DND.LauncherDraggable))) return DND.DragMotionResult.NO_DROP;
-
-        let sourceId;
-        if (source instanceof DND.LauncherDraggable) sourceId = source.getId();
-        else sourceId = source.get_app_id();
-
-        let launcherPos = 0;
-        let children = this.myactor.get_children();
-        for (let i = 0; i < this._dragPlaceholderPos; i++) {
-            if (this._dragPlaceholder &&
-                children[i] == this._dragPlaceholder.actor)
-                continue;
-
-            let childId = children[i]._delegate.getId();
-            if (source === children[i]._delegate)
-                continue;
-            launcherPos++;
-        }
-        if (source instanceof DND.LauncherDraggable && source.launchersBox == this)
-            this.moveLauncher(source, launcherPos);
-        else {
-            if (source instanceof DND.LauncherDraggable)
-                source.launchersBox.removeLauncher(source, false);
-            this.addForeignLauncher(sourceId, launcherPos, source);
-        }
-        actor.destroy();
-        return true;
     }
-};
-Signals.addSignalMethods(MyApplet.prototype);
+
+    _reinsertAtIndex(launcher, newIndex) {
+        let originalIndex = this._launchers.indexOf(launcher);
+        if (originalIndex == -1)
+            return;
+
+        if (originalIndex != newIndex) {
+            this.myactor.set_child_at_index(launcher.actor, newIndex);
+            this._launchers.splice(originalIndex, 1);
+            this._launchers.splice(newIndex, 0, launcher);
+            this._move_launcher_in_proxy(launcher, newIndex);
+            this.sync_settings_proxy_to_settings();
+        }
+    }
+
+    // backwards compatibility passthrough method for launcher code expecting DND on applet
+    _clearDragPlaceholder(skipAnimation=false) {
+        this.launchersBox._clearDragPlaceholder(skipAnimation);
+    }
+}
+Signals.addSignalMethods(CinnamonPanelLaunchersApplet.prototype);
 
 function main(metadata, orientation, panel_height, instance_id) {
-    let myApplet = new MyApplet(metadata, orientation, panel_height, instance_id);
-    return myApplet;
+    return new CinnamonPanelLaunchersApplet(metadata, orientation, panel_height, instance_id);
 }

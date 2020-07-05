@@ -1,4 +1,4 @@
-NULL = 
+NULL =
 BUILT_SOURCES =
 CLEANFILES =
 EXTRA_DIST =
@@ -10,7 +10,7 @@ service_in_files =
 
 -include $(INTROSPECTION_MAKEFILE)
 INTROSPECTION_GIRS =
-INTROSPECTION_SCANNER_ARGS = --warn-all --add-include-path=$(srcdir)
+INTROSPECTION_SCANNER_ARGS = --warn-all --add-include-path=$(srcdir) --add-include-path=$(MUFFIN_GIR_DIR) -L$(MUFFIN_TYPELIB_DIR)
 INTROSPECTION_COMPILER_ARGS = --includedir=$(srcdir) --includedir=$(MUFFIN_TYPELIB_DIR)
 
 typelibdir = $(pkglibdir)
@@ -29,17 +29,8 @@ CLEANFILES += $(service_DATA)
 
 CLEANFILES += $(gir_DATA) $(typelib_DATA)
 
-bin_SCRIPTS += cinnamon-extension-tool
-EXTRA_DIST += cinnamon-extension-tool.in
 bin_PROGRAMS = cinnamon-real
-
-if USE_JHBUILD_WRAPPER_SCRIPT
-cinnamon = cinnamon-jhbuild
-bin_SCRIPTS += cinnamon-jhbuild
-else
 cinnamon = cinnamon-real
-endif
-EXTRA_DIST += cinnamon-jhbuild.in
 
 noinst_DATA = cinnamon
 cinnamon: $(cinnamon) Makefile
@@ -54,21 +45,13 @@ generated_script_substitutions = \
 	    -e "s|@datadir[@]|$(datadir)|" \
 	    -e "s|@libexecdir[@]|$(libexecdir)|" \
 	    -e "s|@libdir[@]|$(libdir)|" \
-	    -e "s|@JHBUILD_TYPELIBDIR[@]|$(JHBUILD_TYPELIBDIR)|" \
 	    -e "s|@pkgdatadir[@]|$(pkgdatadir)|" \
 	    -e "s|@pkglibexecdir[@]|$(pkglibexecdir)|" \
-	    -e "s|@PYTHON[@]|$(PYTHON)|" \
 	    -e "s|@VERSION[@]|$(VERSION)|" \
 	    -e "s|@sysconfdir[@]|$(sysconfdir)|" \
-        -e "s|@GJS_CONSOLE[@]|$(GJS_CONSOLE)|"
-
-cinnamon-jhbuild: cinnamon-jhbuild.in cinnamon-real Makefile
-	$(AM_V_GEN) sed $(generated_script_substitutions) $< > $@.tmp && mv $@.tmp $@ && chmod a+x $@
-	@# Regenerate libtool wrapper so Alt+F2 restart will work
-	@$(LIBTOOL) --mode=execute test -f cinnamon-real
-
-cinnamon-extension-tool: cinnamon-extension-tool.in Makefile
-	$(AM_V_GEN) sed $(generated_script_substitutions) $< > $@.tmp && mv $@.tmp $@ && chmod a+x $@
+			-e "s|@MUFFIN_PLUGIN_API_VERSION[@]|$(MUFFIN_PLUGIN_API_VERSION)|" \
+      -e "s|@MUFFIN_TYPELIB_DIR[@]|$(MUFFIN_TYPELIB_DIR)|" \
+      -e "s|@GJS_CONSOLE[@]|$(GJS_CONSOLE)|"
 
 CLEANFILES += cinnamon $(bin_SCRIPTS)
 
@@ -80,28 +63,29 @@ cinnamon_cflags =				\
 	$(WARN_CFLAGS)				\
 	$(CINNAMON_CFLAGS)			\
 	-I$(srcdir)/tray			\
-    -DCLUTTER_ENABLE_EXPERIMENTAL_API   \
-    -DCOGL_ENABLE_EXPERIMENTAL_API  \
+	-DCLUTTER_ENABLE_EXPERIMENTAL_API				\
+	-DCOGL_ENABLE_EXPERIMENTAL_API \
+	-DCOGL_ENABLE_EXPERIMENTAL_2_0_API   \
+	-DCLUTTER_DISABLE_DEPRECATION_WARNINGS				\
+	-DCOGL_DISABLE_DEPRECATION_WARNINGS				\
 	-DVERSION=\"$(VERSION)\"		\
 	-DLOCALEDIR=\"$(datadir)/locale\" 	\
 	-DDATADIR=\"$(datadir)\"		\
 	-DCINNAMON_LIBEXECDIR=\"$(libexecdir)\"	\
 	-DCINNAMON_DATADIR=\"$(pkgdatadir)\"	\
+	-DMUFFIN_TYPELIB_DIR=\"$(MUFFIN_TYPELIB_DIR)\" \
 	-DCINNAMON_PKGLIBDIR=\"$(pkglibdir)\" \
 	-DCINNAMON_PKGLIBEXECDIR=\"$(pkglibexecdir)\"	\
 	-DJSDIR=\"$(pkgdatadir)/js\"
 
 privlibdir = $(pkglibdir)
-privlib_LTLIBRARIES = libcinnamon.la libcinnamon-js.la
+privlib_LTLIBRARIES = libcinnamon.la $(MUFFIN_LIBS)
 
 cinnamon_built_sources = \
-	cinnamon-marshal.h \
-	cinnamon-marshal.c \
 	cinnamon-enum-types.h \
 	cinnamon-enum-types.c
 
 BUILT_SOURCES += $(cinnamon_built_sources)
-EXTRA_DIST += cinnamon-marshal.list
 
 cinnamon_public_headers_h =		\
 	cinnamon-app.h			\
@@ -111,7 +95,6 @@ cinnamon_public_headers_h =		\
 	cinnamon-generic-container.h	\
 	cinnamon-gtk-embed.h		\
 	cinnamon-global.h			\
-	cinnamon-mount-operation.h		\
 	cinnamon-perf-log.h		\
 	cinnamon-screenshot.h	\
 	cinnamon-slicer.h			\
@@ -121,8 +104,7 @@ cinnamon_public_headers_h =		\
 	cinnamon-util.h			\
 	cinnamon-window-tracker.h		\
 	cinnamon-wm.h			\
-	cinnamon-xfixes-cursor.h \
-    cinnamon-js.h
+	cinnamon-xfixes-cursor.h
 
 libcinnamon_la_SOURCES =		\
 	$(cinnamon_built_sources)		\
@@ -141,7 +123,6 @@ libcinnamon_la_SOURCES =		\
 	cinnamon-generic-container.c	\
 	cinnamon-gtk-embed.c		\
 	cinnamon-global.c			\
-	cinnamon-mount-operation.c		\
 	cinnamon-perf-log.c		\
 	cinnamon-screenshot.c		\
 	cinnamon-slicer.c			\
@@ -151,36 +132,21 @@ libcinnamon_la_SOURCES =		\
 	cinnamon-util.c			\
 	cinnamon-window-tracker.c		\
 	cinnamon-wm.c			\
-	cinnamon-xfixes-cursor.c \
-    cinnamon-js.cpp
+	cinnamon-xfixes-cursor.c
 
 libcinnamon_la_gir_sources = \
 	$(filter-out %-private.h $(cinnamon_recorder_non_gir_sources), $(cinnamon_public_headers_h) $(libcinnamon_la_SOURCES))
 
 cinnamon_real_SOURCES =		\
 	main.c
-cinnamon_real_CPPFLAGS = $(cinnamon_cflags)
-cinnamon_real_LDADD = libcinnamon.la libcinnamon-js.la $(libcinnamon_la_LIBADD)
+cinnamon_real_CPPFLAGS = \
+	-DMUFFIN_TYPELIB_DIR=\"$(MUFFIN_TYPELIB_DIR)\" \
+	$(MUFFIN_CFLAGS) \
+	$(cinnamon_cflags)
+
+cinnamon_real_LDADD = libcinnamon.la $(CINNAMON_LIBS) $(MUFFIN_LIBS) -lm -lpthread
+cinnamon_real_LDFLAGS = -rpath $(MUFFIN_TYPELIB_DIR)
 cinnamon_real_DEPENDENCIES = libcinnamon.la
-
-########################################
-
-libcinnamon_js_la_SOURCES =      \
-    cinnamon-js.h          \
-    cinnamon-js.cpp            \
-    $(NULL)
-
-libcinnamon_js_la_LIBADD =       \
-    $(CINNAMON_JS_LIBS)      \
-    $(NULL)
-
-libcinnamon_js_la_LDFLAGS =	\
-    $(WARN_LDFLAGS)		\
-    -avoid-version
-
-libcinnamon_js_la_CPPFLAGS =    \
-    $(WARN_CFLAGS)		\
-    $(CINNAMON_JS_CFLAGS)
 
 ########################################
 
@@ -205,7 +171,6 @@ test_recorder_CPPFLAGS = $(WARN_CFLAGS)		\
 test_recorder_LDADD = $(TEST_CINNAMON_RECORDER_LIBS) \
                        libst-1.0.la
 
-
 test_recorder_SOURCES =     \
 	$(cinnamon_recorder_sources) $(cinnamon_recorder_non_gir_sources) \
 	test-recorder.c
@@ -217,42 +182,20 @@ pkglibexec_PROGRAMS += cinnamon-perf-helper
 
 cinnamon_perf_helper_SOURCES = cinnamon-perf-helper.c
 cinnamon_perf_helper_CPPFLAGS = $(WARN_CFLAGS) $(CINNAMON_PERF_HELPER_CFLAGS)
-cinnamon_perf_helper_LDADD = $(CINNAMON_PERF_HELPER_LIBS)
+cinnamon_perf_helper_LDADD = $(CINNAMON_PERF_HELPER_LIBS) -lm
 
 ########################################
 
 noinst_PROGRAMS += run-js-test
 
-run_js_test_CPPFLAGS = $(cinnamon_cflags)
-run_js_test_LDADD = libcinnamon.la $(CINNAMON_JS_LIBS) $(libcinnamon_la_LIBADD)
-run_js_test_LDFLAGS = $(WARN_LDFLAGS) -export-dynamic
+run_js_test_CPPFLAGS = $(MUFFIN_CFLAGS) $(cinnamon_cflags)
+run_js_test_LDADD = libcinnamon.la $(CINNAMON_LIBS) $(MUFFIN_LIBS)
+run_js_test_LDFLAGS = -export-dynamic -rpath $(MUFFIN_TYPELIB_DIR)
 
 run_js_test_SOURCES =			\
 	run-js-test.c
 
 ########################################
-
-cinnamon-marshal.h: stamp-cinnamon-marshal.h
-	@true
-stamp-cinnamon-marshal.h: Makefile cinnamon-marshal.list
-	$(AM_V_GEN) $(GLIB_GENMARSHAL) \
-		--prefix=_cinnamon_marshal \
-		--header \
-	$(srcdir)/cinnamon-marshal.list > xgen-smh && \
-	(cmp -s xgen-smh cinnamon-marshal.h || cp -f xgen-smh cinnamon-marshal.h) && \
-	rm -f xgen-smh && \
-	echo timestamp > $(@F)
-CLEANFILES += stamp-cinnamon-marshal.h
-
-cinnamon-marshal.c: Makefile cinnamon-marshal.list
-	$(AM_V_GEN) (echo "#include \"cinnamon-marshal.h\"" ; \
-	 $(GLIB_GENMARSHAL) \
-		--prefix=_cinnamon_marshal \
-		--body \
-	 $(srcdir)/cinnamon-marshal.list ) > xgen-smc && \
-	cp -f xgen-smc cinnamon-marshal.c && \
-	rm -f xgen-smc
-
 
 cinnamon-enum-types.h: stamp-cinnamon-enum-types.h Makefile
 	@true
@@ -276,36 +219,30 @@ cinnamon-enum-types.c: $(srcdir)/cinnamon-enum-types.c.in stamp-cinnamon-enum-ty
 	rm -f $(@F).tmp
 EXTRA_DIST += cinnamon-enum-types.c.in
 
-libcinnamon_la_LDFLAGS = $(WARN_LDFLAGS) -avoid-version
-libcinnamon_la_LIBADD =		\
+libcinnamon_libadd =		\
+	-lpthread \
 	-lm			\
 	$(CINNAMON_LIBS)	\
-	$(BLUETOOTH_LIBS)	\
 	libst-1.0.la       	\
-	libtray.la		\
+	libtray.la \
 	$(NULL)
 
-libcinnamon_la_CPPFLAGS = $(cinnamon_cflags)
+libcinnamon_la_LDFLAGS = $(WARN_LDFLAGS) -avoid-version -L$(libdir)/muffin
+libcinnamon_la_LIBADD = $(CINNAMON_LIBS) $(MUFFIN_LIBS) $(libcinnamon_libadd)
+libcinnamon_la_CPPFLAGS = $(MUFFIN_CFLAGS) $(cinnamon_cflags)
 
 Cinnamon-0.1.gir: libcinnamon.la St-1.0.gir
-Cinnamon_0_1_gir_INCLUDES = Clutter-1.0 ClutterX11-1.0 Meta-Muffin.0 Soup-2.4 CMenu-3.0 NetworkManager-1.0 NMClient-1.0
+Cinnamon_0_1_gir_INCLUDES = Clutter-0 ClutterX11-0 CoglPango-0 Cogl-0 Meta-Muffin.0 Soup-2.4 CMenu-3.0
 Cinnamon_0_1_gir_CFLAGS = $(libcinnamon_la_CPPFLAGS) -I $(srcdir)
 Cinnamon_0_1_gir_LIBS = libcinnamon.la
 Cinnamon_0_1_gir_FILES = $(libcinnamon_la_gir_sources)
 Cinnamon_0_1_gir_SCANNERFLAGS = $(WARN_SCANNERFLAGS) --include-uninstalled=$(builddir)/St-1.0.gir \
-	--add-include-path=$(MUFFIN_GIR_DIR) $(if $(BLUETOOTH_DIR),-L $(BLUETOOTH_DIR),)
+	--add-include-path=$(MUFFIN_GIR_DIR)
 INTROSPECTION_GIRS += Cinnamon-0.1.gir
 CLEANFILES += Cinnamon-0.1.gir
 
-CinnamonJS-0.1.gir: libcinnamon-js.la
-CinnamonJS_0_1_gir_CFLAGS = $(libcinnamon_la_CPPFLAGS) -I $(srcdir)
-CinnamonJS_0_1_gir_LIBS = libcinnamon-js.la
-CinnamonJS_0_1_gir_FILES = $(libcinnamon_js_la_SOURCES)
-INTROSPECTION_GIRS += CinnamonJS-0.1.gir
-CLEANFILES += CinnamonJS-0.1.gir
-
 St-1.0.gir: libst-1.0.la
-St_1_0_gir_INCLUDES = Clutter-1.0 Gtk-3.0
+St_1_0_gir_INCLUDES = Clutter-0 ClutterX11-0 Meta-Muffin.0 Gtk-3.0
 St_1_0_gir_CFLAGS = $(st_cflags) -DST_COMPILATION
 St_1_0_gir_LIBS = libst-1.0.la
 St_1_0_gir_FILES = $(filter-out %-private.h $(st_non_gir_sources), $(addprefix $(srcdir)/,$(st_source_h))) \

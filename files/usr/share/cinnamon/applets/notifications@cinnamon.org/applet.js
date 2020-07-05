@@ -5,22 +5,18 @@ const Gtk = imports.gi.Gtk;
 const Gio = imports.gi.Gio;
 const PopupMenu = imports.ui.popupMenu;
 const St = imports.gi.St;
-const Clutter = imports.gi.Clutter;
 const Mainloop = imports.mainloop;
-const MessageTray = imports.ui.messageTray;
 const Urgency = imports.ui.messageTray.Urgency;
 const NotificationDestroyedReason = imports.ui.messageTray.NotificationDestroyedReason;
 const Settings = imports.ui.settings;
+const Gettext = imports.gettext.domain("cinnamon-applets");
+const Util = imports.misc.util;
 
-function MyApplet(metadata, orientation, panel_height, instanceId) {
-    this._init(metadata, orientation, panel_height, instanceId);
-}
+const PANEL_EDIT_MODE_KEY = "panel-edit-mode";
 
-MyApplet.prototype = {
-    __proto__: Applet.TextIconApplet.prototype,
-
-    _init: function(metadata, orientation, panel_height, instanceId) {
-        Applet.TextIconApplet.prototype._init.call(this, orientation, panel_height, instanceId);
+class CinnamonNotificationsApplet extends Applet.TextIconApplet {
+    constructor(metadata, orientation, panel_height, instanceId) {
+        super(orientation, panel_height, instanceId);
 
         this.setAllowedLayout(Applet.AllowedLayout.BOTH);
 
@@ -28,24 +24,42 @@ MyApplet.prototype = {
         this.settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
         this.settings.bind("ignoreTransientNotifications", "ignoreTransientNotifications");
         this.settings.bind("showEmptyTray", "showEmptyTray", this._show_hide_tray);
+        this.settings.bind("keyOpen", "keyOpen", this._setKeybinding);
+        this.settings.bind("keyClear", "keyClear", this._setKeybinding);
+        this._setKeybinding();
 
         // Layout
         this._orientation = orientation;
         this.menuManager = new PopupMenu.PopupMenuManager(this);
 
         // Lists
-        this.notifications = [];	// The list of notifications, in order from oldest to newest.
+        this.notifications = [];    // The list of notifications, in order from oldest to newest.
 
         // Events
         Main.messageTray.connect('notify-applet-update', Lang.bind(this, this._notification_added));
-        global.settings.connect('changed::panel-edit-mode', Lang.bind(this, this.on_panel_edit_mode_changed));
+        global.settings.connect('changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._on_panel_edit_mode_changed));
 
         // States
         this._blinking = false;
         this._blink_toggle = false;
-    },
+    }
+    
+    _setKeybinding() {
+        Main.keybindingManager.addHotKey("notification-open-" + this.instance_id, this.keyOpen, Lang.bind(this, this._openMenu));
+        Main.keybindingManager.addHotKey("notification-clear-" + this.instance_id, this.keyClear, Lang.bind(this, this._clear_all));
+    }
+    
+    on_applet_removed_from_panel () {
+        Main.keybindingManager.removeHotKey("notification-open-" + this.instance_id);
+        Main.keybindingManager.removeHotKey("notification-clear-" + this.instance_id);
+    }
+    
+    _openMenu() {
+        this._update_timestamp();
+        this.menu.toggle();
+    }
 
-    _display: function() {
+    _display() {
         // Always start the applet empty, void of any notifications.
         this.set_applet_icon_symbolic_name("empty-notif");
         this.set_applet_tooltip(_("Notifications"));
@@ -96,35 +110,26 @@ MyApplet.prototype = {
         this._crit_icon = new St.Icon({icon_name: 'critical-notif', icon_type: St.IconType.SYMBOLIC, reactive: true, track_hover: true, style_class: 'system-status-icon' });
         this._alt_crit_icon = new St.Icon({icon_name: 'alt-critical-notif', icon_type: St.IconType.SYMBOLIC, reactive: true, track_hover: true, style_class: 'system-status-icon' });
 
-        this.update_list();
-    },
+        this._on_panel_edit_mode_changed();
 
-    _notification_added: function (mtray, notification) {	// Notification event handler.
+        this.menu.addSettingsAction(_("Notification Settings"), 'notifications');
+    }
+
+    _notification_added (mtray, notification) { // Notification event handler.
         // Ignore transient notifications?
         if (this.ignoreTransientNotifications && notification.isTransient) {
+            notification.destroy();
             return;
         }
 
-        if (notification.enter_id > 0) {
-            notification.actor.disconnect(notification.enter_id);
-            notification.enter_id = 0;
-        }
-        if (notification.leave_id > 0) {
-            notification.actor.disconnect(notification.leave_id);
-            notification.leave_id = 0;
-        }
-
-        notification.actor.opacity = (notification._table.get_theme_node().get_length('opacity') / global.ui_scale) || 255;
-
         notification.actor.unparent();
         let existing_index = this.notifications.indexOf(notification);
-        if (existing_index != -1) {	// This notification is already listed.
+        if (existing_index != -1) { // This notification is already listed.
             if (notification._destroyed) {
                 this.notifications.splice(existing_index, 1);
             } else {
                 notification._inNotificationBin = true;
                 global.reparentActor(notification.actor, this._notificationbin);
-                notification.expand();
                 notification._timeLabel.show();
             }
             this.update_list();
@@ -136,37 +141,29 @@ MyApplet.prototype = {
         notification._inNotificationBin = true;
         this.notifications.push(notification);
         // Steal the notication panel.
-        notification.expand();
-        this._notificationbin.add(notification.actor)
+        this._notificationbin.add(notification.actor);
         notification.actor._parent_container = this._notificationbin;
         notification.actor.add_style_class_name('notification-applet-padding');
         // Register for destruction.
-        notification.connect('clicked', Lang.bind(this, this._item_clicked, false));
-        notification.connect('destroy', Lang.bind(this, this._item_clicked, true));
+        notification.connect('scrolling-changed', (notif, scrolling) => { this.menu.passEvents = scrolling });
+        notification.connect('destroy', () => {
+            let i = this.notifications.indexOf(notification);
+            if (i != -1)
+                this.notifications.splice(i, 1);
+            this.update_list();
+        });
         notification._timeLabel.show();
 
         this.update_list();
-    },
+    }
 
-    _item_clicked: function(notification, destroyed) {
-        let i = this.notifications.indexOf(notification);
-        if (i != -1) {
-            this.notifications.splice(i, 1);
-            if (!destroyed) {
-                notification.destroy(NotificationDestroyedReason.DISMISSED);
-            }
-        }
-        this.update_list();
-    },
-
-    update_list: function () {
+    update_list () {
         try {
             let count = this.notifications.length;
-            if (count > 0) {	// There are notifications.
+            if (count > 0) {    // There are notifications.
                 this.actor.show();
                 this.clear_action.actor.show();
                 this.set_applet_label(count.toString());
-                this.hide_applet_label(false);
                 // Find max urgency and derive list icon.
                 let max_urgency = -1;
                 for (let i = 0; i < count; i++) {
@@ -191,10 +188,9 @@ MyApplet.prototype = {
                         }
                         break;
                 }
-            } else {	// There are no notifications.
+            } else {    // There are no notifications.
                 this._blinking = false;
                 this.set_applet_label('');
-                this.hide_applet_label(true);
                 this.set_applet_icon_symbolic_name("empty-notif");
                 this.clear_action.actor.hide();
                 if (!this.showEmptyTray) {
@@ -207,9 +203,9 @@ MyApplet.prototype = {
         catch (e) {
             global.logError(e);
         }
-    },
+    }
 
-    _clear_all: function() {
+    _clear_all() {
         let count = this.notifications.length;
         if (count > 0) {
             for (let i = count-1; i >=0; i--) {
@@ -219,24 +215,29 @@ MyApplet.prototype = {
         }
         this.notifications = [];
         this.update_list();
-    },
+    }
 
-    _show_hide_tray: function() {	// Show or hide the notification tray.
+    _show_hide_tray() { // Show or hide the notification tray.
         if (this.notifications.length || this.showEmptyTray) {
             this.actor.show();
         } else {
             this.actor.hide();
         }
-    },
+    }
 
-    on_panel_edit_mode_changed: function () {
-    },
+    _on_panel_edit_mode_changed () {
+        if (global.settings.get_boolean(PANEL_EDIT_MODE_KEY)) {
+            this.actor.show();
+        } else {
+            this.update_list();
+        }
+    }
 
-    on_applet_added_to_panel: function() {
+    on_applet_added_to_panel() {
         this.on_orientation_changed(this._orientation);
-    },
+    }
 
-    on_orientation_changed: function (orientation) {
+    on_orientation_changed (orientation) {
         this._orientation = orientation;
 
         if (this.menu) {
@@ -245,26 +246,28 @@ MyApplet.prototype = {
         this.menu = new Applet.AppletPopupMenu(this, orientation);
         this.menuManager.addMenu(this.menu);
         this._display();
-    },
+    }
 
-    on_applet_clicked: function(event) {
-        this._update_timestamp();
-        this.menu.toggle();
-    },
+    on_applet_clicked(event) {
+        this._openMenu();
+    }
 
-    _update_timestamp: function () {
-        let dateFormat = _("%l:%M %p");
-        let actors = this._notificationbin.get_children();
-        if (actors) {
-            for (let i = 0; i < actors.length; i++) {
-                let notification = actors[i]._delegate;
+    on_btn_open_system_settings_clicked() {
+        Util.spawnCommandLine("cinnamon-settings notifications");
+    }
+
+    _update_timestamp() {
+        let len = this.notifications.length;
+        if (len > 0) {
+            for (let i = 0; i < len; i++) {
+                let notification = this.notifications[i];
                 let orig_time = notification._timestamp;
                 notification._timeLabel.clutter_text.set_markup(timeify(orig_time));
             }
         }
-    },
+    }
 
-    critical_blink: function () {
+    critical_blink () {
         if (!this._blinking)
             return;
         if (this._blink_toggle) {
@@ -275,29 +278,18 @@ MyApplet.prototype = {
         this._blink_toggle = !this._blink_toggle;
         Mainloop.timeout_add_seconds(1, Lang.bind(this, this.critical_blink));
     }
-};
+}
 
 function main(metadata, orientation, panel_height, instanceId) {
-    let myApplet = new MyApplet(metadata, orientation, panel_height, instanceId);
-    return myApplet;
+    return new CinnamonNotificationsApplet(metadata, orientation, panel_height, instanceId);
 }
 
 function stringify(count) {
-    let str;
-    switch (true) {
-        case (count == 0):
-            str = _("No notifications");
-            break;
-        case (count == 1):
-            str = count.toString() + _(" notification");
-            break;
-        case (count > 1):
-            str = count.toString() + _(" notifications");
-            break;
-        default:
-            str = "";
+    if (count === 0) {
+        return _("No notifications");
+    } else {
+        return ngettext("%d notification", "%d notifications", count).format(count);
     }
-    return str;
 }
 
 function timeify(orig_time) {
@@ -312,18 +304,17 @@ function timeify(orig_time) {
         str = orig_time.toLocaleFormat('%r');
     }
     switch (true) {
-        case (diff <= 15):
-            str += _(" (Just now)");
+        case (diff <= 15): {
+            str += " (" + _("just now") + ")";
             break;
-        case (diff > 15 && diff <= 59):
-            str += _(" (%s seconds ago)").format(diff.toString());
+        } case (diff > 15 && diff <= 59): {
+            str += " (" + ngettext("%d second ago", "%d seconds ago", diff).format(diff) + ")";
             break;
-        case (diff > 59 && diff <= 119):
-            str += _(" (%s minute ago)").format(Math.floor(diff / 60).toString());
+        } case (diff > 59 && diff <= 3540): {
+            let diff_minutes = Math.floor(diff / 60);
+            str += " (" + ngettext("%d minute ago", "%d minutes ago", diff_minutes).format(diff_minutes) + ")";
             break;
-        case (diff > 119 && diff <= 3540):
-            str += _(" (%s minutes ago)").format(Math.floor(diff / 60).toString());
-            break;
+        }
     }
     return str;
 }

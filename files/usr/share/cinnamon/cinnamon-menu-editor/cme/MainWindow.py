@@ -20,12 +20,11 @@
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('CMenu', '3.0')
-from gi.repository import Gtk, GObject, Gio, GdkPixbuf, Gdk, CMenu, GLib
-import cgi
+from gi.repository import Gtk, GObject, Gdk, CMenu
+import html
 import os
 import gettext
 import subprocess
-import shutil
 
 from cme import config
 gettext.bindtextdomain(config.GETTEXT_PACKAGE, config.localedir)
@@ -209,7 +208,7 @@ class MainWindow(object):
 
     def loadMenu(self, iters, parent=None):
         for menu, show in self.editor.getMenus(parent):
-            name = cgi.escape(menu.get_name())
+            name = html.escape(menu.get_name())
             if not show:
                 name = "<small><i>%s</i></small>" % (name,)
 
@@ -230,7 +229,7 @@ class MainWindow(object):
             else:
                 assert False, 'should not be reached'
 
-            name = cgi.escape(name)
+            name = html.escape(name)
             if not show:
                 name = "<small><i>%s</i></small>" % (name,)
 
@@ -308,14 +307,11 @@ class MainWindow(object):
             return
 
         if isinstance(item, CMenu.TreeEntry):
-            file_path = os.path.join(util.getUserItemPath(), item.get_desktop_file_id())
             file_type = 'launcher'
         elif isinstance(item, CMenu.TreeDirectory):
-            file_path = os.path.join(util.getUserDirectoryPath(), os.path.split(item.get_desktop_file_path())[1])
             file_type = 'directory'
 
-        if not os.path.isfile(file_path):
-            shutil.copy(item.get_desktop_file_path(), file_path)
+        file_path = item.get_desktop_file_path()
 
         if file_path not in self.edit_pool:
             self.edit_pool.append(file_path)

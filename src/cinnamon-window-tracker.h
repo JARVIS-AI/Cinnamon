@@ -35,9 +35,7 @@ CinnamonApp *cinnamon_window_tracker_get_window_app (CinnamonWindowTracker *trac
 
 CinnamonApp *cinnamon_window_tracker_get_app_from_pid (CinnamonWindowTracker *tracker, int pid);
 
-gboolean cinnamon_window_tracker_is_window_interesting (MetaWindow *window);
-
-const char *_cinnamon_window_tracker_get_app_context (CinnamonWindowTracker *tracker, CinnamonApp *app);
+gboolean cinnamon_window_tracker_is_window_interesting (CinnamonWindowTracker *tracker, MetaWindow *window);
 
 GSList *cinnamon_window_tracker_get_startup_sequences (CinnamonWindowTracker *tracker);
 

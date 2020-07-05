@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 # coding: utf-8
 
 # This parser starts by parsing all the javascript code, and representing each
@@ -47,7 +47,6 @@
 
 import sys
 import os
-import xml.etree.ElementTree as ET
 import re
 from gen_lib import *
 
@@ -104,7 +103,7 @@ for _file in _files:
     if not FILE_REGEX.match(parts[-1]):
         continue
 
-    file_obj = open(_file, 'r')
+    file_obj = open(_file, 'r', encoding="utf-8")
 
     curr_file = JSFile(parts[-2], parts[-1][:-3])
 
@@ -128,9 +127,9 @@ for _file in _files:
     scope = ''
 
     for line in file_obj:
-################################################################################
-#                       Process all unimportant comments                       #
-################################################################################
+        ################################################################################
+        #                       Process all unimportant comments                       #
+        ################################################################################
 
         # Strip ' * ' at the beginning of each long comment block
         if state == STATE_PROPERTY    or \
@@ -187,14 +186,14 @@ for _file in _files:
                 state = STATE_PROPERTY
 
             elif FUNCTION_NAME_REGEX.match(line) and \
-                 ((bracket_count == 1 and curr_obj != curr_file) or \
-                  (bracket_count == 0 and curr_obj == curr_file)):
+                ((bracket_count == 1 and curr_obj != curr_file) or \
+                 (bracket_count == 0 and curr_obj == curr_file)):
                 curr_item = JSFunction(FUNCTION_NAME_REGEX.match(line).group(1))
                 curr_obj.add_function(curr_item)
                 state = STATE_PROPERTY
 
             elif SIGNAL_NAME_REGEX.match(line) and \
-                 (bracket_count > 0 and curr_obj != curr_file):
+                    (bracket_count > 0 and curr_obj != curr_file):
                 curr_item = JSSignal(SIGNAL_NAME_REGEX.match(line).group(1))
                 curr_obj.add_signal(curr_item)
                 state = STATE_PROPERTY
@@ -237,7 +236,7 @@ for _file in _files:
                 curr_item.set_return(curr_prop)
             elif INHERITS_REGEX.match(line):
                 # Anything after the inherit line shouldn't be there
-                state = STATE_COMMENT 
+                state = STATE_COMMENT
                 curr_item.set_inherit(INHERITS_REGEX.match(line).group(1))
             else:
                 curr_item.append_description(line)

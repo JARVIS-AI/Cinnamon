@@ -1,6 +1,7 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
-from GSettingsWidgets import *
+from SettingsWidgets import SidePage
+from xapp.GSettingsWidgets import *
 
 
 class Module:
@@ -15,7 +16,7 @@ class Module:
 
     def on_module_selected(self):
         if not self.loaded:
-            print "Loading Tiling module"
+            print("Loading Tiling module")
 
             page = SettingsPage()
             self.sidePage.add_widget(page)

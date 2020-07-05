@@ -1,4 +1,4 @@
-#! /usr/bin/python2
+#!/usr/bin/python3
 
 from gi.repository import Gio, GLib
 import dbus, dbus.service, dbus.glib
@@ -6,6 +6,7 @@ from dbus.mainloop.glib import DBusGMainLoop
 import random
 import os, locale
 from xml.etree import ElementTree
+from setproctitle import setproctitle
 
 SLIDESHOW_DBUS_NAME = "org.Cinnamon.Slideshow"
 SLIDESHOW_DBUS_PATH = "/org/Cinnamon/Slideshow"
@@ -117,7 +118,7 @@ class CinnamonSlideshow(dbus.service.Object):
         def on_next_file_complete(obj, res, user_data=all_files):
             files = obj.next_files_finish(res)
             file_list = all_files
-            if len(files) is not 0:
+            if len(files) != 0:
                 file_list = file_list.extend(files)
                 enumerator.next_files_async(100, GLib.PRIORITY_LOW, None, on_next_file_complete, None)
             else:
@@ -293,7 +294,7 @@ class CinnamonSlideshow(dbus.service.Object):
                                 else:
                                     propAttr = prop.attrib
                                     wpName = prop.text
-                                    locName = self.splitLocaleCode(propAttr.get(locAttrName)) if propAttr.has_key(locAttrName) else ("", "")
+                                    locName = self.splitLocaleCode(propAttr.get(locAttrName)) if locAttrName in propAttr else ("", "")
                                     names.append((locName, wpName))
                         wallpaperData["name"] = self.getLocalWallpaperName(names, loc)
 
@@ -302,13 +303,22 @@ class CinnamonSlideshow(dbus.service.Object):
                                 wallpaperData["name"] = os.path.basename(wallpaperData["filename"])
                             res.append(wallpaperData)
             return res
-        except Exception, detail:
-            print detail
+        except Exception as detail:
+            print(detail)
             return []
 ###############
 
 if __name__ == "__main__":
+    setproctitle("cinnamon-slideshow")
     DBusGMainLoop(set_as_default=True)
-    slideshow = CinnamonSlideshow()
+
+    sessionBus = dbus.SessionBus ()
+    request = sessionBus.request_name(SLIDESHOW_DBUS_NAME, dbus.bus.NAME_FLAG_DO_NOT_QUEUE)
+    if request != dbus.bus.REQUEST_NAME_REPLY_EXISTS:
+        slideshow = CinnamonSlideshow()
+    else:
+        print("cinnamon-slideshow already running.")
+        quit()
+
     ml = GLib.MainLoop.new(None, True)
     ml.run()

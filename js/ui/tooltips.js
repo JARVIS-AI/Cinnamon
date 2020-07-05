@@ -1,14 +1,17 @@
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
 const St = imports.gi.St;
+const Gio = imports.gi.Gio;
 
 const Applet = imports.ui.applet;
 const Main = imports.ui.main;
 const SignalManager = imports.misc.signalManager;
 const Tweener = imports.ui.tweener;
-const Gio = imports.gi.Gio;
+const {PanelLoc} = imports.ui.panel;
+
 const DESKTOP_SCHEMA = 'org.cinnamon.desktop.interface';
 const CURSOR_SIZE_KEY = 'cursor-size';
+
 /**
  * #TooltipBase
  * @item (Clutter.Actor): The object owning the tooltip.
@@ -50,32 +53,33 @@ const CURSOR_SIZE_KEY = 'cursor-size';
  * `true`.
  */
 function TooltipBase(item) {
-    throw new TypeError("Trying to instantiate abstract class TooltipBase");
+    this._init(item);
 }
 
 TooltipBase.prototype = {
     _init: function(item) {
-        this.signals = new SignalManager.SignalManager(this);
+        this.signals = new SignalManager.SignalManager(null);
 
-        this.signals.connect(global.stage, 'notify::key-focus', this._hide);
-        this.signals.connect(item, 'enter-event', this._onEnterEvent);
-        this.signals.connect(item, 'motion-event', this._onMotionEvent);
-        this.signals.connect(item, 'leave-event', this._hide);
-        this.signals.connect(item, 'button-press-event', this._hide);
-        this.signals.connect(item, 'button-release-event', this._hide);
-        this.signals.connect(item, 'destroy', this.destroy);
+        this.signals.connect(global.stage, 'notify::key-focus', this._hide, this);
+        this.signals.connect(item, 'enter-event', this._onEnterEvent, this);
+        this.signals.connect(item, 'motion-event', this._onMotionEvent, this);
+        this.signals.connect(item, 'leave-event', this._hide, this);
+        this.signals.connect(item, 'button-press-event', this._hide, this);
+        this.signals.connect(item, 'button-release-event', this._hide, this);
+        this.signals.connect(item, 'destroy', this.destroy, this);
         this.signals.connect(item, 'allocation-changed', function() {
             // An allocation change could mean that the actor has moved,
             // so hide, but wait until after the allocation cycle.
             Mainloop.idle_add(Lang.bind(this, function() {
                 this._hide();
             }));
-        });
+        }, this);
 
         this._showTimer = null;
         this.visible = false;
         this.item = item;
         this.preventShow = false;
+        this.mousePosition = null;
     },
 
     _onMotionEvent: function(actor, event) {
@@ -117,13 +121,7 @@ TooltipBase.prototype = {
     _onHideTimerComplete: function() {
         this._hideTimer = null;
 
-        let [abs_x, abs_y, mods] = global.get_pointer();
-        let box = this.item.get_allocation_box();
-
-        let [success, x, y] = this.item.get_parent().transform_stage_point(abs_x, abs_y);
-
-        if ((x < box.x1) || (x > box.x2) ||
-            (y < box.y1) || (y > box.y2)) {
+        if (!this.item.has_pointer) {
             this._hide();
         }
 
@@ -209,13 +207,14 @@ Tooltip.prototype = {
     },
 
     hide: function() {
+        if (this._tooltip.is_finalized()) return;
         this._tooltip.hide();
 
         this.visible = false;
     },
 
     show: function() {
-        if (this._tooltip.get_text() == "")
+        if (this._tooltip.get_text() == "" || !this.mousePosition)
             return;
 
         let tooltipWidth = this._tooltip.get_allocation_box().x2 - this._tooltip.get_allocation_box().x1;
@@ -244,6 +243,18 @@ Tooltip.prototype = {
      */
     set_text: function(text) {
         this._tooltip.set_text(text);
+        this._tooltip.get_clutter_text().set_use_markup(false);
+    },
+
+    /**
+     * set_markup:
+     * @text (string): new text to display
+     *
+     * Sets the text to display to @markup.
+     */
+    set_markup: function(markup) {
+        this._tooltip.set_text(markup);
+        this._tooltip.get_clutter_text().set_use_markup(true);
     },
 
     _destroy: function() {
@@ -297,45 +308,46 @@ PanelItemTooltip.prototype = {
     },
 
     show: function() {
-        if (this._tooltip.get_text() == "" || global.menuStackLength > 0)
+        if (this._tooltip.get_text() == "" || global.menuStackLength > 0 || !this.mousePosition)
             return;
 
         let op = this._tooltip.get_opacity();
         this._tooltip.set_opacity(0);
         this._tooltip.show();
 
-        let tooltipHeight = this._tooltip.get_allocation_box().y2 - this._tooltip.get_allocation_box().y1;
-        let tooltipWidth = this._tooltip.get_allocation_box().x2 - this._tooltip.get_allocation_box().x1;
-
         let monitor = Main.layoutManager.findMonitorForActor(this._panelItem.actor);
+
+        let [minW, minH, tooltipWidth, tooltipHeight] = this._tooltip.get_preferred_size();
         let tooltipTop = 0;
         let tooltipLeft = 0;
+        let panel = null;
 
         switch (this.orientation) {
             case St.Side.BOTTOM:
-                tooltipTop = this.item.get_transformed_position()[1] - tooltipHeight;
+                panel = Main.panelManager.getPanel(monitor.index, PanelLoc.bottom);
+                tooltipTop = monitor.y + monitor.height - tooltipHeight - panel.actor.height;
                 tooltipLeft = this.mousePosition[0] - Math.round(tooltipWidth / 2);
                 tooltipLeft = Math.max(tooltipLeft, monitor.x);
                 tooltipLeft = Math.min(tooltipLeft, monitor.x + monitor.width - tooltipWidth);
                 break;
             case St.Side.TOP:
-                tooltipTop = this.item.get_transformed_position()[1] + this.item.get_transformed_size()[1];
+                panel = Main.panelManager.getPanel(monitor.index, PanelLoc.top);
+                tooltipTop =  monitor.y + panel.actor.height;
                 tooltipLeft = this.mousePosition[0] - Math.round(tooltipWidth / 2);
                 tooltipLeft = Math.max(tooltipLeft, monitor.x);
                 tooltipLeft = Math.min(tooltipLeft, monitor.x + monitor.width - tooltipWidth);
                 break;
             case St.Side.LEFT:
-                [tooltipLeft, tooltipTop] = this._panelItem.actor.get_transformed_position();
-                tooltipTop = tooltipTop + Math.round((this._panelItem.actor.get_allocation_box().y2 -
-                    this._panelItem.actor.get_allocation_box().y1) / 2) - Math.round(tooltipHeight / 2);
-                tooltipLeft = tooltipLeft + this._panelItem.actor.get_allocation_box().x2 -
-                    this._panelItem.actor.get_allocation_box().x1;
+                panel = Main.panelManager.getPanel(monitor.index, PanelLoc.left);
+                tooltipTop = this._panelItem.actor.get_transformed_position()[1];
+                tooltipTop += Math.round((this._panelItem.actor.height - tooltipHeight) / 2);
+                tooltipLeft = monitor.x + panel.actor.width;
                 break;
             case St.Side.RIGHT:
-                [tooltipLeft, tooltipTop] = this._panelItem.actor.get_transformed_position();
-                tooltipTop = tooltipTop + Math.round((this._panelItem.actor.get_allocation_box().y2 -
-                    this._panelItem.actor.get_allocation_box().y1) / 2) - Math.round(tooltipHeight / 2);
-                tooltipLeft = tooltipLeft - tooltipWidth;
+                panel = Main.panelManager.getPanel(monitor.index, PanelLoc.right);
+                tooltipTop = this._panelItem.actor.get_transformed_position()[1];
+                tooltipTop += Math.round((this._panelItem.actor.height - tooltipHeight) / 2);
+                tooltipLeft = monitor.x + monitor.width - tooltipWidth - panel.actor.width;
                 break;
             default:
                 break;

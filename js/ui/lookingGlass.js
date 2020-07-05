@@ -4,6 +4,8 @@ const Cinnamon = imports.gi.Cinnamon;
 const Clutter = imports.gi.Clutter;
 const Cogl = imports.gi.Cogl;
 const Gio = imports.gi.Gio;
+const GLib = imports.gi.GLib;
+const GObject = imports.gi.GObject;
 const Lang = imports.lang;
 const Meta = imports.gi.Meta;
 const Signals = imports.signals;
@@ -35,13 +37,98 @@ var commandHeader = 'const Clutter = imports.gi.Clutter; ' +
                     'const r = Lang.bind(Main.lookingGlass, Main.lookingGlass.getResult); ';
 
 const HISTORY_KEY = 'looking-glass-history';
-function objectToString(o) {
-    if (typeof(o) == typeof(objectToString)) {
-        // special case this since the default is way, way too verbose
-        return '<js function>';
+
+/* fake types for special cases:
+ *  -"array": objects that pass Array.isArray() and should only show enumerable properties
+ *  -"boxedproto": boxed prototypes throw an error on property access
+ *  -"importer": objects that load modules on property access
+ */
+
+// returns [typeString, valueString] for any object
+function getObjInfo(o) {
+    let type, value;
+    if (o === null)
+        type = "null";
+    else if (o === undefined)
+        type = "undefined";
+
+    if (type) {
+        value = "[" + type + "]";
     } else {
-        return '' + o;
+        // try to detect importers via their string representation
+        try {
+            value = o.toString();
+        } catch (e) {
+            if (e.message.includes("not an object instance - cannot convert to GObject*")) {
+                // work around Clutter.Actor.prototype.toString override not handling being
+                // called with the prototype itself as 'this'
+                value = GObject.Object.prototype.toString.call(o);
+            } else {
+                value = "[error getting value]";
+            }
+        }
+
+        type = typeof(o);
+        if (type == "object") {
+            if (value.startsWith("[GjsFileImporter")
+                || value.startsWith("[object GjsModule gi")) {
+                type = "importer";
+            } else if (value.startsWith("[boxed prototype")) {
+                type = "boxedproto";
+            } else if (Array.isArray(o)) {
+                type = "array";
+            }
+        }
+
+        // make empty strings/arrays obvious
+        if (value === "")
+            value = "[empty]";
     }
+
+    return [type, value];
+}
+
+// returns an array of dictionaries conforming to the Inspect dbus schema
+function getObjKeysInfo(obj) {
+    let [type, ] = getObjInfo(obj);
+    if (!["array", "object"].includes(type))
+        return [];
+
+    let keys = new Set();
+    let curProto = obj;
+
+    // we ignore the Object prototype
+    while (curProto && curProto !== Object.prototype) {
+        let ownKeys;
+        if (type === "array")
+            ownKeys = curProto.keys(); // index properties only
+        else
+            ownKeys = Reflect.ownKeys(curProto); // all own properties and symbols
+
+        // adding to set ignores duplicates
+        for (let key of ownKeys)
+            keys.add(key);
+
+        curProto = Object.getPrototypeOf(curProto);
+    }
+
+
+    return Array.from(keys).map((k) => {
+        let [t, v] = getObjInfo(obj[k]);
+        return { name: k.toString(), type: t, value: v, shortValue: "" };
+    });
+}
+
+// always returns an object we can give back to melange.
+// it may be useful to inspect Error() objects
+function tryEval(js) {
+    let out;
+    try {
+        out = eval(js);
+    } catch (e) {
+        out = e;
+    }
+    return out;
 }
 
 function WindowList() {
@@ -52,17 +139,17 @@ WindowList.prototype = {
     _init : function () {
         this.lastId = 0;
         this.latestWindowList = [];
-        
+
         let tracker = Cinnamon.WindowTracker.get_default();
         global.display.connect('window-created', Lang.bind(this, this._updateWindowList));
-        tracker.connect('tracked-windows-changed', Lang.bind(this, this._updateWindowList));
+        tracker.connect('window-app-changed', Lang.bind(this, this._updateWindowList));
     },
-    
+
     getWindowById: function(id) {
         let windows = global.get_window_actors();
         for (let i = 0; i < windows.length; i++) {
             let metaWindow = windows[i].metaWindow;
-            if(metaWindow._lgId === id)
+            if (metaWindow._lgId === id)
                 return metaWindow;
         }
         return null;
@@ -71,46 +158,52 @@ WindowList.prototype = {
     _updateWindowList: function() {
         let windows = global.get_window_actors();
         let tracker = Cinnamon.WindowTracker.get_default();
-        
+
         let oldWindowList = this.latestWindowList;
         this.latestWindowList = [];
         for (let i = 0; i < windows.length; i++) {
             let metaWindow = windows[i].metaWindow;
+
+            // only track "interesting" windows
+            if (!Main.isInteresting(metaWindow))
+                continue;
+
             // Avoid multiple connections
             if (!metaWindow._lookingGlassManaged) {
                 metaWindow.connect('unmanaged', Lang.bind(this, this._updateWindowList));
                 metaWindow._lookingGlassManaged = true;
-                
+
                 metaWindow._lgId = this.lastId;
                 this.lastId++;
             }
-            
-            let lgInfo = { id: metaWindow._lgId.toString(), title: metaWindow.title, wmclass: metaWindow.get_wm_class(), app: ''};
-            
+
+            let lgInfo = {
+                id: metaWindow._lgId.toString(),
+                title: metaWindow.title + '',
+                wmclass: metaWindow.get_wm_class() + '',
+                app: '' };
+
             let app = tracker.get_window_app(metaWindow);
             if (app != null && !app.is_window_backed()) {
-                lgInfo.app = app.get_id();
+                lgInfo.app = app.get_id() + '';
             } else {
                 lgInfo.app = '<untracked>';
             }
-            
-            // Ignore menus
-            let wtype = metaWindow.get_window_type();
-            if(wtype != Meta.WindowType.MENU && wtype != Meta.WindowType.DROPDOWN_MENU && wtype != Meta.WindowType.POPUP_MENU)
-                this.latestWindowList.push(lgInfo);
+
+            this.latestWindowList.push(lgInfo);
         }
-        
+
         // Make sure the list changed before notifying listeneres
         let changed = oldWindowList.length != this.latestWindowList.length;
-        if(!changed) {
-            for(let i=0; i<oldWindowList.length; i++) {
-                if(oldWindowList[i].id != this.latestWindowList[i].id) {
+        if (!changed) {
+            for (let i = 0; i < oldWindowList.length; i++) {
+                if (oldWindowList[i].id != this.latestWindowList[i].id) {
                     changed = true;
                     break;
                 }
             }
         }
-        if(changed)
+        if (changed)
             Main.createLookingGlass().emitWindowListUpdate();
     }
 };
@@ -177,24 +270,24 @@ Inspector.prototype = {
         this.passThroughEvents = false;
         this._updatePassthroughText();
     },
-    
+
     _updatePassthroughText: function() {
-        if(this.passThroughEvents)
+        if (this.passThroughEvents)
             this._passThroughText.text = '(Press Pause or Control to disable event pass through)';
         else
             this._passThroughText.text = '(Press Pause or Control to enable event pass through)';
     },
 
     _onCapturedEvent: function (actor, event) {
-        if(event.type() == Clutter.EventType.KEY_PRESS && (event.get_key_symbol() == Clutter.Control_L ||
-                                                           event.get_key_symbol() == Clutter.Control_R ||
-                                                           event.get_key_symbol() == Clutter.Pause)) {
+        if (event.type() == Clutter.EventType.KEY_PRESS && (event.get_key_symbol() == Clutter.Control_L ||
+                                                            event.get_key_symbol() == Clutter.Control_R ||
+                                                            event.get_key_symbol() == Clutter.Pause)) {
             this.passThroughEvents = !this.passThroughEvents;
             this._updatePassthroughText();
             return true;
         }
 
-        if(this.passThroughEvents)
+        if (this.passThroughEvents)
             return false;
 
         switch (event.type()) {
@@ -259,34 +352,34 @@ Inspector.prototype = {
 
     _onScrollEvent: function (actor, event) {
         switch (event.get_scroll_direction()) {
-        case Clutter.ScrollDirection.UP:
-            // select parent
-            let parent = this._target.get_parent();
-            if (parent != null) {
-                this._target = parent;
-                this._update(event);
-            }
-            break;
-
-        case Clutter.ScrollDirection.DOWN:
-            // select child
-            if (this._target != this._pointerTarget) {
-                let child = this._pointerTarget;
-                while (child) {
-                    let parent = child.get_parent();
-                    if (parent == this._target)
-                        break;
-                    child = parent;
-                }
-                if (child) {
-                    this._target = child;
+            case Clutter.ScrollDirection.UP:
+                // select parent
+                let parent = this._target.get_parent();
+                if (parent != null) {
+                    this._target = parent;
                     this._update(event);
                 }
-            }
-            break;
+                break;
 
-        default:
-            break;
+            case Clutter.ScrollDirection.DOWN:
+                // select child
+                if (this._target != this._pointerTarget) {
+                    let child = this._pointerTarget;
+                    while (child) {
+                        let parent = child.get_parent();
+                        if (parent == this._target)
+                            break;
+                        child = parent;
+                    }
+                    if (child) {
+                        this._target = child;
+                        this._update(event);
+                    }
+                }
+                break;
+
+            default:
+                break;
         }
         return true;
     },
@@ -394,6 +487,7 @@ function Melange() {
 Melange.prototype = {
     _init: function() {
         this.proxy = null;
+        this._it = null;
         this._open = false;
         this._settings = new Gio.Settings({schema_id: "org.cinnamon.desktop.keybindings"});
         this._settings.connect("changed::looking-glass-keybinding", Lang.bind(this, this._update_keybinding));
@@ -446,40 +540,18 @@ Melange.prototype = {
     _pushResult: function(command, obj, tooltip) {
         let index = this._results.length;
         let result = {"o": obj, "index": index};
-        this.rawResults.push({command: command, type: typeof(obj), object: objectToString(obj), index: index.toString(), tooltip: tooltip});
+        let [type, value] = getObjInfo(obj);
+        this.rawResults.push({command: command, type: type, object: value, index: index.toString(), tooltip: tooltip});
         this.emitResultUpdate();
-        
+
         this._results.push(result);
         this._it = obj;
     },
 
     inspect: function(path) {
         let fullCmd = commandHeader + path;
-
-        let result = eval(fullCmd);
-        let resultObj = [];
-        for (let key in result) {
-            let type = typeof(result[key]);
-
-            //fixme: move this shortvalue stuff to python lg
-            let shortValue, value;
-            if (type === "undefined" || result[key] === null) {
-                value = "";
-                shortValue = "";
-            } else {
-                value = result[key].toString();
-                shortValue = value;
-                let i = value.indexOf('\n');
-                let j = value.indexOf('\r');
-                if( j != -1 && (i == -1 || i > j))
-                    i = j;
-                if(i != -1)
-                    shortValue = value.substr(0, i) + '.. <more>';
-            }
-            resultObj.push({ name: key, type: type, value: value, shortValue: shortValue});
-        }
-        
-        return resultObj;
+        let result = tryEval(fullCmd);
+        return getObjKeysInfo(result);
     },
 
     getIt: function () {
@@ -496,50 +568,26 @@ Melange.prototype = {
 
     getWindowApp: function(idx) {
         let metaWindow = this._windowList.getWindowById(idx)
-        if(metaWindow) {
+        if (metaWindow) {
             let tracker = Cinnamon.WindowTracker.get_default();
             return tracker.get_window_app(metaWindow);
         }
         return null;
     },
-    
+
     // DBus function
     Eval: function(command) {
         this._history.addItem(command);
 
         let fullCmd = commandHeader + command;
+        let ts = GLib.get_monotonic_time();
 
-        let resultObj;
+        let resultObj = tryEval(fullCmd);
 
-        /*  Set up for some reporting about memory impact and execution speed.
-            The performance impact of CinnamonJS.get_memory_info should be 
-            very small, whereas getting a timestamp might involve some 
-            memory allocation, so we grab the timestamp first.
-        */
-        let ts = new Date().getTime();
-        let memInfo = global.get_memory_info();
-        
-        try {
-            resultObj = eval(fullCmd);
-        } catch (e) {
-            resultObj = '<exception ' + e + '>';
-        }
-        let memInfo2 = global.get_memory_info();
-        let ts2 = new Date().getTime();
-
-        let tooltip = _("Memory information (Final / Diff):") + "\n";
-        tooltip += '    uordblks: ' + (memInfo2.glibc_uordblks) + " / " + (memInfo2.glibc_uordblks - memInfo.glibc_uordblks) + "\n" + 
-                   '    js_bytes: ' + (memInfo2.js_bytes) + " / " + (memInfo2.js_bytes - memInfo.js_bytes) + "\n" + 
-                   '    gjs_boxed: ' + (memInfo2.gjs_boxed) + " / " + (memInfo2.gjs_boxed - memInfo.gjs_boxed) + "\n" + 
-                   '    gjs_gobject: ' + (memInfo2.gjs_gobject) + " / " + (memInfo2.gjs_gobject - memInfo.gjs_gobject) + "\n" + 
-                   '    gjs_function: ' + (memInfo2.gjs_function) + " / " + (memInfo2.gjs_function - memInfo.gjs_function) + "\n" + 
-                   '    gjs_closure: ' + (memInfo2.gjs_closure) + " / " + (memInfo2.gjs_closure - memInfo.gjs_closure) + "\n";
-
-        tooltip += _("Execution time (ms): ") + (ts2 - ts);
+        let ts2 = GLib.get_monotonic_time();
+        let tooltip = _("Execution time (ms): ") + (ts2 - ts) / 1000;
 
         this._pushResult(command, resultObj, tooltip);
-
-        return;
     },
 
     // DBus function
@@ -550,14 +598,7 @@ Melange.prototype = {
     // DBus function
     AddResult: function(path) {
         let fullCmd = commandHeader + path;
-
-        let resultObj;
-        try {
-            resultObj = eval(fullCmd);
-        } catch (e) {
-            resultObj = '<exception ' + e + '>';
-        }
-        this._pushResult(path, resultObj, "");
+        this._pushResult(path, tryEval(fullCmd), "");
     },
 
     // DBus function
@@ -567,20 +608,7 @@ Melange.prototype = {
 
     // DBus function
     GetMemoryInfo: function() {
-        let memInfo = global.get_memory_info();
-        let result = [
-            true,
-            memInfo.last_gc_seconds_ago,
-            {
-                'glibc_uordblks': (memInfo.glibc_uordblks),
-                'js_bytes': (memInfo.js_bytes),
-                'gjs_boxed': (memInfo.gjs_boxed),
-                'gjs_gobject': (memInfo.gjs_gobject),
-                'gjs_function': (memInfo.gjs_function),
-                'gjs_closure': (memInfo.gjs_closure)
-            }
-        ]
-        return result;
+        return null;
     },
 
     // DBus function
@@ -614,8 +642,8 @@ Melange.prototype = {
         try {
             let inspector = new Inspector();
             inspector.connect('target', Lang.bind(this, function(i, target, stageX, stageY) {
-                this._pushResult('<inspect x:' + stageX + ' y:' + stageY + '>',
-                                 target, "");
+                let name = '<inspect x:' + stageX + ' y:' + stageY + '>';
+                this._pushResult(name, target, "Inspected actor");
             }));
             inspector.connect('closed', Lang.bind(this, function() {
                 this.emitInspectorDone();
@@ -628,26 +656,23 @@ Melange.prototype = {
     // DBus function
     GetExtensionList: function() {
         try {
-            let extensionList = [];
-            for (let type in Extension.Type) {
-                type = Extension.Type[type];
-                for(let uuid in type.maps.meta){
-                    let meta = type.maps.meta[uuid];
-                    // There can be cases where we create dummy extension metadata
-                    // that's not really a proper extension. Don't bother with these.
-                    if (meta.name) {
-                        extensionList.push({
-                            status: Extension.getMetaStateString(meta.state),
-                            name: meta.name,
-                            description: meta.description,
-                            uuid: uuid,
-                            folder: meta.path,
-                            url: meta.url ? meta.url : '',
-                            type: type.name,
-                            error_message: meta.error ? meta.error : _("Loaded successfully"),
-                            error: meta.error ? "true" : "false" // Must use string due to dbus restrictions
-                        });
-                    }
+            let extensionList = Array(Extension.extensions.length);
+            for (let i = 0; i < extensionList.length; i++) {
+                let meta = Extension.extensions[i].meta;
+                // There can be cases where we create dummy extension metadata
+                // that's not really a proper extension. Don't bother with these.
+                if (meta.name) {
+                    extensionList[i] = {
+                        status: Extension.getMetaStateString(meta.state),
+                        name: meta.name,
+                        description: meta.description,
+                        uuid: Extension.extensions[i].uuid,
+                        folder: meta.path,
+                        url: meta.url ? meta.url : '',
+                        type: Extension.extensions[i].name,
+                        error_message: meta.error ? meta.error : _("Loaded successfully"),
+                        error: meta.error ? "true" : "false" // Must use string due to dbus restrictions
+                    };
                 }
             }
             return [true, extensionList];
@@ -661,23 +686,23 @@ Melange.prototype = {
     ReloadExtension: function(uuid, type) {
         Extension.reloadExtension(uuid, Extension.Type[type]);
     },
-    
+
     emitLogUpdate: function() {
         this._dbusImpl.emit_signal('LogUpdate', null);
     },
-    
+
     emitWindowListUpdate: function() {
         this._dbusImpl.emit_signal('WindowListUpdate', null);
     },
-    
+
     emitResultUpdate: function() {
         this._dbusImpl.emit_signal('ResultUpdate', null);
     },
-    
+
     emitInspectorDone: function() {
         this._dbusImpl.emit_signal('InspectorDone', null);
     },
-    
+
     emitExtensionListUpdate: function() {
         this._dbusImpl.emit_signal('ExtensionListUpdate', null);
     },

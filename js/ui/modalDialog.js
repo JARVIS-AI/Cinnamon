@@ -19,11 +19,12 @@ const Tweener = imports.ui.tweener;
 
 const Gettext = imports.gettext;
 
-const OPEN_AND_CLOSE_TIME = 0.1;
 const FADE_IN_BUTTONS_TIME = 0.33;
 const FADE_OUT_DIALOG_TIME = 1.0;
 
-const State = {
+var OPEN_AND_CLOSE_TIME = 0.1;
+
+var State = {
     OPENED: 0,
     CLOSED: 1,
     OPENING: 2,
@@ -175,6 +176,9 @@ ModalDialog.prototype = {
 
         for (let i = 0; i < buttons.length; i ++) {
             let buttonInfo = buttons[i];
+            if (!buttonInfo.focused) {
+                buttonInfo.focused = false;
+            }
             let label = buttonInfo['label'];
             let action = buttonInfo['action'];
             let key = buttonInfo['key'];
@@ -420,167 +424,6 @@ ModalDialog.prototype = {
 Signals.addSignalMethods(ModalDialog.prototype);
 
 /**
- * #SpicesAboutDialog:
- * @short_description: A dialog for a spice "about" window
- *
- * This is a window that displays an about dialog for Cinnamon "spices".
- *
- * This is usually used by Cinnamon itself via an "About" right click menu, but
- * individual spices can also use this to open an about dialog if they wish.
- */
-function SpicesAboutDialog(metadata, type) {
-    this._init(metadata, type);
-}
-
-SpicesAboutDialog.prototype = {
-    __proto__: ModalDialog.prototype,
-
-    /**
-     * _init:
-     * metadata (JSON): the metadata object of the spice
-     * type (string): the type of the spice, which should be "applet",
-     * "desklet" or "extension"
-     */
-    _init: function(metadata, type) {
-        ModalDialog.prototype._init.call(this);
-
-        //prepare translation
-        this.uuid = metadata.uuid;
-        Gettext.bindtextdomain(metadata.uuid, GLib.get_home_dir() + "/.local/share/locale");
-
-        let contentBox = new St.BoxLayout({vertical: true, style_class: "about-content" });
-        this.contentLayout.add_actor(contentBox);
-        
-        let topBox = new St.BoxLayout();
-        contentBox.add_actor(topBox);
-        
-        //icon
-        let icon;
-        if (metadata.icon) {
-            icon = new St.Icon({icon_name: metadata.icon, icon_size: 48, icon_type: St.IconType.FULLCOLOR, style_class: "about-icon"});
-        } else {
-            let file = Gio.file_new_for_path(metadata.path + "/icon.png");
-            if (file.query_exists(null)) {
-                let gicon = new Gio.FileIcon({file: file});
-                icon = new St.Icon({gicon: gicon, icon_size: 48, icon_type: St.IconType.FULLCOLOR, style_class: "about-icon"});
-            } else {
-                icon = new St.Icon({icon_name: "cs-"+type, icon_size: 48, icon_type: St.IconType.FULLCOLOR, style_class: "about-icon"});
-            }
-        }
-        topBox.add_actor(icon);
-        
-        let topTextBox = new St.BoxLayout({vertical: true});
-        topBox.add_actor(topTextBox);
-        
-        /*title*/
-        let titleBox = new St.BoxLayout();
-        topTextBox.add_actor(titleBox);
-
-        let title = new St.Label({text: this._(metadata.name), style_class: "about-title"});
-        titleBox.add_actor(title);
-        
-        if (metadata.version) {
-            let versionBin = new St.Bin({x_align: St.Align.START, y_align: St.Align.END});
-            titleBox.add_actor(versionBin);
-            let version = new St.Label({text: " v%s".format(metadata.version), style_class: "about-version"});
-            versionBin.add_actor(version);
-        }
-        
-        //uuid
-        let uuid = new St.Label({text: metadata.uuid, style_class: "about-uuid"});
-        topTextBox.add_actor(uuid);
-        
-        //description
-        let desc = new St.Label({text: this._(metadata.description), style_class: "about-description"});
-        let dText = desc.clutter_text;
-        dText.ellipsize = Pango.EllipsizeMode.NONE;
-        dText.line_wrap = true;
-        dText.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
-        topTextBox.add_actor(desc);
-
-        // optional content
-        if(metadata.comments || metadata.website || metadata.contributors){
-            let scrollBox = new St.ScrollView({style_class: "about-scrollBox"});
-            contentBox.add(scrollBox, {expand: true});
-            let infoBox = new St.BoxLayout({vertical: true, style_class: "about-scrollBox-innerBox"});
-            scrollBox.add_actor(infoBox);
-
-            // comments
-            if (metadata.comments) {
-                let comments = new St.Label({text: _("Comments:") + "\n\t" + this._(metadata.comments)});
-                let cText = comments.clutter_text;
-                cText.ellipsize = Pango.EllipsizeMode.NONE;
-                cText.line_wrap = true;
-                cText.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
-                infoBox.add_actor(comments);
-            }
-
-            // website
-            if (metadata.website) {
-                let wsBox = new St.BoxLayout({vertical: true});
-                infoBox.add_actor(wsBox);
-
-                let wLabel = new St.Label({text: _("Website:")});
-                wsBox.add_actor(wLabel);
-
-                let wsButton = new St.Button({x_align: St.Align.START, style_class: "cinnamon-link", name: "about-website"});
-                wsBox.add_actor(wsButton);
-                let website = new St.Label({text: metadata.website});
-                let wtext = website.clutter_text;
-                wtext.ellipsize = Pango.EllipsizeMode.NONE;
-                wtext.line_wrap = true;
-                wtext.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
-                wsButton.add_actor(website);
-                wsButton.connect("clicked", Lang.bind(this, this._launchSite, metadata.website));
-            }
-
-            // contributors
-            if (metadata.contributors) {
-                let list = metadata.contributors;
-
-                // enforce that the list is an array
-                if(typeof list === "string")
-                    list = list.split(",");
-
-                // trim whitespaces, try to translate each item and glue all together
-                list = list.map(String.trim).map(this._, this).join("\n\t");
-
-                let contributors = new St.Label({text: _("Contributors:") + "\n\t" + list});
-                infoBox.add_actor(contributors);
-            }
-        }
-        
-        //dialog close button
-        this.setButtons([
-            {label: _("Close"), key: "", focus: true, action: Lang.bind(this, this._onOk)}
-        ]);
-        
-        this.open(global.get_current_time());
-    },
-
-    // translation
-    _: function(str) {
-        // look into the text domain first
-        let translated = Gettext.dgettext(this.uuid, str);
-
-        // if it looks translated, return the translation of the domain
-        if(translated !== str)
-            return translated;
-        // else, use the default cinnamon domain
-        return _(str);
-    },
-
-    _onOk: function() {
-        this.close(global.get_current_time());
-    },
-    
-    _launchSite: function(a, b, site) {
-        Util.spawnCommandLine("xdg-open " + site);
-        this.close(global.get_current_time());
-    }
-}
-
-/**
  * #ConfirmDialog
  * @short_description: A simple dialog with a "Yes" and "No" button.
  * @callback (function): Callback when "Yes" is clicked
@@ -611,15 +454,15 @@ ConfirmDialog.prototype = {
 
         this.setButtons([
             {
+                label: _("No"),
+                action: Lang.bind(this, this.destroy)
+            },
+            {
                 label: _("Yes"),
                 action: Lang.bind(this, function(){
                     this.destroy();
                     this.callback();
                 })
-            },
-            {
-                label: _("No"),
-                action: Lang.bind(this, this.destroy)
             }
         ]);
     },
@@ -701,7 +544,7 @@ InfoOSD.prototype = {
      * show:
      * @monitorIndex (int): (optional) Monitor to display OSD on. Default is
      * primary monitor
-     * 
+     *
      * Shows the OSD at the center of monitor @monitorIndex. Shows at the
      * primary monitor if not specified.
      */
@@ -731,10 +574,11 @@ InfoOSD.prototype = {
 
     /**
      * destroy:
-     * 
+     *
      * Destroys the OSD
      */
     destroy: function() {
+        this.hide();
         Main.layoutManager.removeChrome(this.actor);
         this.actor.destroy();
     },

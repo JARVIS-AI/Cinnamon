@@ -9,8 +9,6 @@
     <title>Cinnamon Tutorials</title>
     <releaseinfo>
       This document is for Cinnamon @VERSION@.
-
-      The latest version of this documentation can be found online at <ulink role="online-location" url="http://developer.linuxmint.com/reference/git/cinnamon-tutorials/">http://developer.linuxmint.com/reference/git/cinnamon-tutorials/</ulink>.
     </releaseinfo>
   </bookinfo>
   <part id="documentation">
@@ -28,6 +26,7 @@
     <title>Extension system</title>
     <xi:include href="write-applet.xml"/>
     <xi:include href="xlet-versioning.xml"/>
+    <xi:include href="xlet-translating.xml"/>
     <xi:include href="xlet-settings.xml"/>
     <xi:include href="xlet-settings-ref.xml"/>
   </part>

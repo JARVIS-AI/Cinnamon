@@ -1,6 +1,7 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
-from GSettingsWidgets import *
+from SettingsWidgets import SidePage
+from xapp.GSettingsWidgets import *
 from ChooserButtonWidgets import TweenChooserButton, EffectChooserButton
 
 EFFECT_SETS = {
@@ -22,7 +23,7 @@ TRANSITIONS_SETS = {
 }
 
 TIME_SETS = {
-    "cinnamon": (175, 175, 200, 100, 100, 100),
+    "cinnamon": (100, 120, 160, 100, 100, 100),
     "slow":     (400, 400, 400, 100, 100, 100),
     "normal":   (250, 250, 250, 100, 100, 100),
     "fast":     (100, 100, 100, 100, 100, 100),
@@ -30,7 +31,7 @@ TIME_SETS = {
 }
 
 COMBINATIONS = {
-   #  name           effect    transition    time
+    #  name           effect    transition    time
     "cinnamon":   ("cinnamon", "cinnamon", "cinnamon"),
     "scale":      ("scale",    "normal",   "normal"),
     "fancyScale": ("scale",    "extra",    "slow"),
@@ -39,7 +40,7 @@ COMBINATIONS = {
     "move":       ("move",     "normal",   "fast"),
     "flyUp":      ("flyUp",    "normal",   "fast"),
     "flyDown":    ("flyDown",  "normal",   "fast"),
-   #for previous versions
+    #for previous versions
     "default":    ("default",  "normal",   "default")
 }
 
@@ -52,7 +53,7 @@ OPTIONS = (
     ("move",       _("Move")),
     ("flyUp",      _("Fly up, down")),
     ("flyDown",    _("Fly down, up")),
-   #for previous versions
+    #for previous versions
     ("default",    _("Default"))
 )
 TYPES = ("map", "close", "minimize", "maximize", "unmaximize", "tile")
@@ -60,28 +61,28 @@ SCHEMA = "org.cinnamon"
 DEP_PATH = "org.cinnamon/desktop-effects"
 KEY_TEMPLATE = "desktop-effects-%s-%s"
 
-class GSettingsTweenChooserButton(TweenChooserButton, CSGSettingsBackend):
+class GSettingsTweenChooserButton(TweenChooserButton, PXGSettingsBackend):
     def __init__(self, schema, key, dep_key):
         self.key = key
         self.bind_prop = "tween"
         self.bind_dir = Gio.SettingsBindFlags.DEFAULT
         self.bind_object = self
 
-        if schema not in settings_objects.keys():
+        if schema not in settings_objects:
             settings_objects[schema] = Gio.Settings.new(schema)
         self.settings = settings_objects[schema]
 
         super(GSettingsTweenChooserButton, self).__init__()
         self.bind_settings()
 
-class GSettingsEffectChooserButton(EffectChooserButton, CSGSettingsBackend):
+class GSettingsEffectChooserButton(EffectChooserButton, PXGSettingsBackend):
     def __init__(self, schema, key, dep_key, options):
         self.key = key
         self.bind_prop = "effect"
         self.bind_dir = Gio.SettingsBindFlags.DEFAULT
         self.bind_object = self
 
-        if schema not in settings_objects.keys():
+        if schema not in settings_objects:
             settings_objects[schema] = Gio.Settings.new(schema)
         self.settings = settings_objects[schema]
 
@@ -100,7 +101,7 @@ class Module:
 
     def on_module_selected(self):
         if not self.loaded:
-            print "Loading Effects module"
+            print("Loading Effects module")
 
             self.sidePage.stack = SettingsStack()
             self.sidePage.add_widget(self.sidePage.stack)
@@ -117,7 +118,7 @@ class Module:
 
             settings = page.add_section(_("Enable Effects"))
 
-            widget = GSettingsSwitch(_("Window effects"), "org.cinnamon", "desktop-effects")
+            widget = GSettingsSwitch(_("Window effects"), "org.cinnamon.muffin", "desktop-effects")
             settings.add_row(widget)
 
             widget = GSettingsSwitch(_("Effects on dialog boxes"), "org.cinnamon", "desktop-effects-on-dialogs")
@@ -135,10 +136,6 @@ class Module:
 
             widget = GSettingsSwitch(_("Session startup animation"), "org.cinnamon", "startup-animation")
             settings.add_row(widget)
-
-            if Gtk.get_major_version() == 3 and Gtk.get_minor_version() >= 16:
-                widget = GSettingsSwitch(_("Overlay scroll bars (logout required)"), "org.cinnamon.desktop.interface", "gtk-overlay-scrollbars")
-                settings.add_row(widget)
 
             self.schema.connect("changed::desktop-effects", self.on_desktop_effects_enabled_changed)
 
@@ -160,7 +157,7 @@ class Module:
             self.revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
             self.revealer.set_transition_duration(150)
             page.add(self.revealer)
-            settings = SettingsBox(_("Effect"))
+            settings = SettingsSection(_("Effect"))
             self.revealer.add(settings)
 
             self.size_group = Gtk.SizeGroup.new(Gtk.SizeGroupMode.HORIZONTAL)

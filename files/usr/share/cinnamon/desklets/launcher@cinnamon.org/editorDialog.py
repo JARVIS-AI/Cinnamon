@@ -1,10 +1,11 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 #-*-indent-tabs-mode: nil-*-
 
 import sys
 import os.path
 
 import gi
+gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gio
 
 SCHEMAS = "org.cinnamon.desklets.launcher"
@@ -34,6 +35,7 @@ class EditorDialog:
                 self.launcher_type = "Custom Application"
 
         self.tree = Gtk.Builder()
+        self.tree.set_translation_domain('cinnamon') # let it translate!
         self.tree.add_from_file(EDITOR_DIALOG_UI_PATH)
 
         self.dialog = self.tree.get_object("dialog")

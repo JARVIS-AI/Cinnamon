@@ -8,8 +8,11 @@
 #define __ST_COGL_WRAPPER_H__
 
 #include <clutter/clutter.h>
+#include <cogl/cogl.h>
 
 G_BEGIN_DECLS
+
+CoglContext * st_get_cogl_context(void);
 
 CoglTexture * st_cogl_texture_new_from_data_wrapper                (int  width,
                                                                     int  height,

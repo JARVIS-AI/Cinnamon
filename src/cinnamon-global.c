@@ -2,84 +2,11 @@
 
 #include "config.h"
 
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <math.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#ifdef HAVE_SYS_RESOURCE_H
-#include <sys/resource.h>
-#endif
-
-#include <X11/extensions/Xfixes.h>
-#include <cogl-pango/cogl-pango.h>
-#include <clutter/glx/clutter-glx.h>
-#include <clutter/x11/clutter-x11.h>
-#include <gdk/gdkx.h>
-#include <gio/gio.h>
-#include <girepository.h>
-#include <meta/display.h>
-#include <meta/util.h>
-
-#include "cinnamon-enum-types.h"
 #include "cinnamon-global-private.h"
-#include "cinnamon-marshal.h"
-#include "cinnamon-perf-log.h"
-#include "cinnamon-window-tracker.h"
-#include "cinnamon-wm.h"
-#include "cinnamon-js.h"
-#include "st.h"
 
 static CinnamonGlobal *the_object = NULL;
 
 static void grab_notify (GtkWidget *widget, gboolean is_grab, gpointer user_data);
-
-struct _CinnamonGlobal {
-  GObject parent;
-
-  ClutterStage *stage;
-  Window stage_xwindow;
-  GdkWindow *stage_gdk_window;
-
-  MetaDisplay *meta_display;
-  GdkDisplay *gdk_display;
-  Display *xdisplay;
-  MetaScreen *meta_screen;
-  GdkScreen *gdk_screen;
-
-  /* We use this window to get a notification from GTK+ when
-   * a widget in our process does a GTK+ grab.  See
-   * http://bugzilla.gnome.org/show_bug.cgi?id=570641
-   * 
-   * This window is never mapped or shown.
-   */
-  GtkWindow *grab_notifier;
-  gboolean gtk_grab_active;
-
-  CinnamonStageInputMode input_mode;
-  XserverRegion input_region;
-
-  GjsContext *js_context;
-  MetaPlugin *plugin;
-  CinnamonWM *wm;
-  GSettings *settings;
-  GSettings *interface_settings;
-  const char *datadir;
-  const char *imagedir;
-  const char *userdatadir;
-  StFocusManager *focus_manager;
-
-  guint work_count;
-  GSList *leisure_closures;
-  guint leisure_function_id;
-
-  guint32 xdnd_timestamp;
-  gint64 last_gc_end_time;
-  guint ui_scale;
-};
 
 enum {
   PROP_0,
@@ -102,7 +29,8 @@ enum {
   PROP_IMAGEDIR,
   PROP_USERDATADIR,
   PROP_FOCUS_MANAGER,
-  PROP_UI_SCALE
+  PROP_UI_SCALE,
+  PROP_SESSION_RUNNING
 };
 
 /* Signals */
@@ -133,6 +61,9 @@ cinnamon_global_set_property(GObject         *object,
     {
     case PROP_STAGE_INPUT_MODE:
       cinnamon_global_set_stage_input_mode (global, g_value_get_enum (value));
+      break;
+    case PROP_SESSION_RUNNING:
+      global->session_running = g_value_get_boolean (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -216,6 +147,9 @@ cinnamon_global_get_property(GObject         *object,
       break;
     case PROP_UI_SCALE:
       g_value_set_uint (value, global->ui_scale);
+      break;
+    case PROP_SESSION_RUNNING:
+      g_value_set_boolean (value, global->session_running);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -301,8 +235,7 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    _cinnamon_marshal_VOID__INT_INT,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 2, G_TYPE_INT, G_TYPE_INT);
 
   /* Emitted from cinnamon-plugin.c during event handling */
@@ -311,8 +244,7 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    g_cclosure_marshal_VOID__VOID,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 0);
 
   /* Emitted from cinnamon-plugin.c during event handling */
@@ -321,8 +253,7 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    g_cclosure_marshal_VOID__VOID,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 0);
 
   cinnamon_global_signals[NOTIFY_ERROR] =
@@ -330,8 +261,7 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    gi_cclosure_marshal_generic,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 2,
                     G_TYPE_STRING,
                     G_TYPE_STRING);
@@ -341,8 +271,7 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    g_cclosure_marshal_VOID__VOID,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 0);
 
   cinnamon_global_signals[SHUTDOWN] =
@@ -350,8 +279,7 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    g_cclosure_marshal_VOID__VOID,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 0);
 
   g_object_class_install_property (gobject_class,
@@ -454,28 +382,28 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                                    PROP_SETTINGS,
                                    g_param_spec_object ("settings",
                                                         "Settings",
-                                                        "GSettings instance for cinnamon configuration",
+                                                        "GSettings instance for Cinnamon configuration",
                                                         G_TYPE_SETTINGS,
                                                         G_PARAM_READABLE));
   g_object_class_install_property (gobject_class,
                                    PROP_DATADIR,
                                    g_param_spec_string ("datadir",
                                                         "Data directory",
-                                                        "Directory containing cinnamon data files",
+                                                        "Directory containing Cinnamon data files",
                                                         NULL,
                                                         G_PARAM_READABLE));
   g_object_class_install_property (gobject_class,
                                    PROP_IMAGEDIR,
                                    g_param_spec_string ("imagedir",
                                                         "Image directory",
-                                                        "Directory containing cinnamon image files",
+                                                        "Directory containing Cinnamon image files",
                                                         NULL,
                                                         G_PARAM_READABLE));
   g_object_class_install_property (gobject_class,
                                    PROP_USERDATADIR,
                                    g_param_spec_string ("userdatadir",
                                                         "User data directory",
-                                                        "Directory containing cinnamon user data",
+                                                        "Directory containing Cinnamon user data",
                                                         NULL,
                                                         G_PARAM_READABLE));
   g_object_class_install_property (gobject_class,
@@ -493,6 +421,14 @@ cinnamon_global_class_init (CinnamonGlobalClass *klass)
                                                       "Current UI Scale",
                                                       0, G_MAXUINT, 1,
                                                       G_PARAM_READABLE));
+
+  g_object_class_install_property (gobject_class,
+                                   PROP_SESSION_RUNNING,
+                                   g_param_spec_boolean ("session-running",
+                                                         "Session state",
+                                                         "If the session startup has already finished",
+                                                         FALSE,
+                                                         G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE));
 }
 
 /**
@@ -730,7 +666,7 @@ cinnamon_global_set_cursor (CinnamonGlobal *global,
         default:
           g_return_if_reached ();
         }
-      cursor = gdk_cursor_new (cursor_type);
+      cursor = gdk_cursor_new_for_display (gdk_display_get_default(), cursor_type);
     }
 
   gdk_window_set_cursor (global->stage_gdk_window, cursor);
@@ -875,20 +811,22 @@ global_stage_notify_height (GObject    *gobject,
   g_object_notify (G_OBJECT (global), "screen-height");
 }
 
-static void
-global_stage_before_paint (ClutterStage *stage,
-                           CinnamonGlobal  *global)
+static gboolean
+global_stage_before_paint (gpointer data)
 {
   cinnamon_perf_log_event (cinnamon_perf_log_get_default (),
                         "clutter.stagePaintStart");
+
+  return TRUE;
 }
 
-static void
-global_stage_after_paint (ClutterStage *stage,
-                          CinnamonGlobal  *global)
+static gboolean
+global_stage_after_paint (gpointer data)
 {
   cinnamon_perf_log_event (cinnamon_perf_log_get_default (),
                         "clutter.stagePaintDone");
+
+  return TRUE;
 }
 
 static void
@@ -1003,15 +941,17 @@ update_scale_factor (GtkSettings *settings,
                      GParamSpec *pspec,
                      gpointer data)
 {
-  gint scale = 1;
+  guint scale = 1;
+  int xft_dpi;
+  GtkSettings *gtk_settings;
   CinnamonGlobal *global = CINNAMON_GLOBAL (data);
   ClutterStage *stage = CLUTTER_STAGE (global->stage);
   StThemeContext *context = st_theme_context_get_for_stage (stage);
   GValue value = G_VALUE_INIT;
 
-  g_value_init (&value, G_TYPE_INT);
+  g_value_init (&value, G_TYPE_UINT);
   if (gdk_screen_get_setting (global->gdk_screen, "gdk-window-scaling-factor", &value)) {
-    scale = g_value_get_int (&value);
+    scale = g_value_get_uint (&value);
     g_object_set (context, "scale-factor", scale, NULL);
 
     if (scale != global->ui_scale) {
@@ -1020,17 +960,14 @@ update_scale_factor (GtkSettings *settings,
     }
   }
 
-  if (g_settings_get_int (global->settings, "active-display-scale") != scale) {
-    g_settings_set_int (global->settings, "active-display-scale", scale);
-  }
+  meta_prefs_set_ui_scale (global->ui_scale);
 
-   /* Make sure clutter and gdk scaling stays disabled
-    * window-scaling-factor doesn't exist yet in clutter < 1.18 */
-  if (g_object_class_find_property (G_OBJECT_GET_CLASS (clutter_settings_get_default ()),
-                                    "window-scaling-factor"))
-    {
-      g_object_set (clutter_settings_get_default (), "window-scaling-factor", 1, NULL);
-    }
+  gtk_settings = gtk_settings_get_default ();
+
+  g_object_get (gtk_settings, "gtk-xft-dpi", &xft_dpi, NULL);
+  g_object_set (clutter_settings_get_default (), "font-dpi", xft_dpi, NULL);
+
+   /* Make sure gdk scaling stays disabled */
   gdk_x11_display_set_window_scale (gdk_display_get_default (), 1);
 }
 
@@ -1062,19 +999,25 @@ _cinnamon_global_set_plugin (CinnamonGlobal *global,
   g_signal_connect (global->stage, "notify::height",
                     G_CALLBACK (global_stage_notify_height), global);
 
-  g_signal_connect (global->stage, "paint",
-                    G_CALLBACK (global_stage_before_paint), global);
-  g_signal_connect_after (global->stage, "paint",
-                          G_CALLBACK (global_stage_after_paint), global);
 
-  cinnamon_perf_log_define_event (cinnamon_perf_log_get_default(),
-                               "clutter.stagePaintStart",
-                               "Start of stage page repaint",
-                               "");
-  cinnamon_perf_log_define_event (cinnamon_perf_log_get_default(),
-                               "clutter.stagePaintDone",
-                               "End of stage page repaint",
-                               "");
+
+  if (g_getenv ("CINNAMON_PERF_OUTPUT") != NULL)
+    {
+      clutter_threads_add_repaint_func_full (CLUTTER_REPAINT_FLAGS_PRE_PAINT,
+                                             (GSourceFunc) global_stage_before_paint,
+                                             NULL, NULL);
+      clutter_threads_add_repaint_func_full (CLUTTER_REPAINT_FLAGS_POST_PAINT,
+                                             (GSourceFunc) global_stage_after_paint,
+                                             NULL, NULL);
+      cinnamon_perf_log_define_event (cinnamon_perf_log_get_default(),
+                                      "clutter.stagePaintStart",
+                                      "Start of stage page repaint",
+                                      "");
+      cinnamon_perf_log_define_event (cinnamon_perf_log_get_default(),
+                                      "clutter.stagePaintDone",
+                                      "End of stage page repaint",
+                                      "");
+    }
 
   g_signal_connect (global->meta_display, "notify::focus-window",
                     G_CALLBACK (focus_window_changed), global);
@@ -1089,19 +1032,6 @@ _cinnamon_global_set_plugin (CinnamonGlobal *global,
   global->focus_manager = st_focus_manager_get_for_stage (global->stage);
 
   update_scale_factor (gtk_settings_get_default (), NULL, global);
-}
-
-/**
- * cinnamon_global_get_memory_info:
- * @global: A #CinnamonGlobal
- * @meminfo: (out caller-allocates): Output location for memory information
- *
- * Get Cinnamon memory usage information.
- */
-void
-cinnamon_global_get_memory_info (CinnamonGlobal *global, CinnamonJSMemoryInfo *meminfo)
-{
-  cinnamon_js_get_memory_info (global->js_context, global->last_gc_end_time, meminfo);
 }
 
 /**
@@ -1208,140 +1138,16 @@ cinnamon_global_destroy_pointer_barrier (CinnamonGlobal *global, guint32 barrier
 #endif
 }
 
-/* Code to close all file descriptors before we exec; copied from gspawn.c in GLib.
- *
- * Authors: Padraig O'Briain, Matthias Clasen, Lennart Poettering
- *
- * http://bugzilla.gnome.org/show_bug.cgi?id=469231
- * http://bugzilla.gnome.org/show_bug.cgi?id=357585
- */
-
-static int
-set_cloexec (void *data, gint fd)
-{
-  if (fd >= GPOINTER_TO_INT (data))
-    fcntl (fd, F_SETFD, FD_CLOEXEC);
-
-  return 0;
-}
-
-#ifndef HAVE_FDWALK
-static int
-fdwalk (int (*cb)(void *data, int fd), void *data)
-{
-  gint open_max;
-  gint fd;
-  gint res = 0;
-
-#ifdef HAVE_SYS_RESOURCE_H
-  struct rlimit rl;
-#endif
-
-#ifdef __linux__
-  DIR *d;
-
-  if ((d = opendir("/proc/self/fd"))) {
-      struct dirent *de;
-
-      while ((de = readdir(d))) {
-          glong l;
-          gchar *e = NULL;
-
-          if (de->d_name[0] == '.')
-              continue;
-
-          errno = 0;
-          l = strtol(de->d_name, &e, 10);
-          if (errno != 0 || !e || *e)
-              continue;
-
-          fd = (gint) l;
-
-          if ((glong) fd != l)
-              continue;
-
-          if (fd == dirfd(d))
-              continue;
-
-          if ((res = cb (data, fd)) != 0)
-              break;
-        }
-
-      closedir(d);
-      return res;
-  }
-
-  /* If /proc is not mounted or not accessible we fall back to the old
-   * rlimit trick */
-
-#endif
-
-#ifdef HAVE_SYS_RESOURCE_H
-  if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_max != RLIM_INFINITY)
-      open_max = rl.rlim_max;
-  else
-#endif
-      open_max = sysconf (_SC_OPEN_MAX);
-
-  for (fd = 0; fd < open_max; fd++)
-      if ((res = cb (data, fd)) != 0)
-          break;
-
-  return res;
-}
-#endif
-
-static void
-pre_exec_close_fds(void)
-{
-  fdwalk (set_cloexec, GINT_TO_POINTER(3));
-}
-
 /**
  * cinnamon_global_reexec_self:
  * @global: A #CinnamonGlobal
- * 
- * Restart the current process.  Only intended for development purposes. 
+ *
+ * Restart the current process.  Only intended for development purposes.
  */
-void 
+void
 cinnamon_global_reexec_self (CinnamonGlobal *global)
 {
-  GPtrArray *arr;
-  gsize len;
-  char *buf;
-  char *buf_p;
-  char *buf_end;
-  GError *error = NULL;
-  
-  /* Linux specific (I think, anyways). */
-  if (!g_file_get_contents ("/proc/self/cmdline", &buf, &len, &error))
-    {
-      g_warning ("failed to get /proc/self/cmdline: %s", error->message);
-      return;
-    }
-      
-  buf_end = buf+len;
-  arr = g_ptr_array_new ();
-  /* The cmdline file is NUL-separated */
-  for (buf_p = buf; buf_p < buf_end; buf_p = buf_p + strlen (buf_p) + 1)
-    g_ptr_array_add (arr, buf_p);
-  
-  g_ptr_array_add (arr, NULL);
-
-  /* Close all file descriptors other than stdin/stdout/stderr, otherwise
-   * they will leak and stay open after the exec. In particular, this is
-   * important for file descriptors that represent mapped graphics buffer
-   * objects.
-   */
-  pre_exec_close_fds ();
-
-  meta_display_unmanage_screen (cinnamon_global_get_display (global),
-                                cinnamon_global_get_screen (global),
-                                cinnamon_global_get_current_time (global));
-
-  execvp (arr->pdata[0], (char**)arr->pdata);
-  g_warning ("failed to reexec: %s", g_strerror (errno));
-  g_ptr_array_free (arr, TRUE);
+  meta_restart ();
 }
 
 void
@@ -1349,7 +1155,7 @@ cinnamon_global_shutdown (void)
 {
     g_signal_emit_by_name (the_object, "shutdown");
 
-    pre_exec_close_fds ();
+    meta_pre_exec_close_fds ();
 
     meta_display_unmanage_screen (cinnamon_global_get_display (the_object),
                                   cinnamon_global_get_screen (the_object),
@@ -1379,23 +1185,11 @@ static void
 grab_notify (GtkWidget *widget, gboolean was_grabbed, gpointer user_data)
 {
   CinnamonGlobal *global = CINNAMON_GLOBAL (user_data);
-  
+
   global->gtk_grab_active = !was_grabbed;
 
   /* Update for the new setting of gtk_grab_active */
   cinnamon_global_set_stage_input_mode (global, global->input_mode);
-}
-
-/**
- * cinnamon_global_get_last_gc_end_time:
- * @global: A #CinnamonGlobal
- *
- * Returns: The timestamp of the last js garbage collection.
- */
-gint64
-cinnamon_global_get_last_gc_end_time (CinnamonGlobal *global)
-{
-    return global->last_gc_end_time;
 }
 
 /**
@@ -1448,7 +1242,7 @@ cinnamon_global_get_pointer (CinnamonGlobal         *global,
   GdkDevice *gdevice;
   GdkScreen *gscreen;
   GdkModifierType raw_mods;
-  
+
   gmanager = gdk_display_get_device_manager (global->gdk_display);
   gdevice = gdk_device_manager_get_client_pointer (gmanager);
   gdk_device_get_position (gdevice, &gscreen, x, y);
@@ -1477,7 +1271,7 @@ cinnamon_global_set_pointer (CinnamonGlobal         *global,
   GdkDevice *gdevice;
   GdkScreen *gscreen;
   int x2, y2;
-  
+
   gmanager = gdk_display_get_device_manager (global->gdk_display);
   gdevice = gdk_device_manager_get_client_pointer (gmanager);
   gdk_device_get_position (gdevice, &gscreen, &x2, &y2);
@@ -1590,22 +1384,22 @@ cinnamon_global_get_current_time (CinnamonGlobal *global)
 /**
  * cinnamon_global_get_pid:
  *
- * Returns: the pid of the cinnamon process.
+ * Return value: the pid of the cinnamon process.
  */
 pid_t
-cinnamon_global_get_pid ()
+cinnamon_global_get_pid (CinnamonGlobal *global)
 {
   return getpid();
 }
 
 /**
  * cinnamon_global_get_md5_for_string:
+ * @string: input string
  *
- * Returns: the MD5 sum for the given string
+ * Return value: (transfer full): the MD5 sum for the given string
  */
-
 gchar *
-cinnamon_global_get_md5_for_string (const gchar *string)
+cinnamon_global_get_md5_for_string (CinnamonGlobal *global, const gchar *string)
 {
     return g_compute_checksum_for_string (G_CHECKSUM_MD5, string, -1);
 }
@@ -1625,7 +1419,7 @@ cinnamon_global_create_app_launch_context (CinnamonGlobal *global)
   GdkAppLaunchContext *context;
 
   context = gdk_display_get_app_launch_context (global->gdk_display);
-  
+
   gdk_app_launch_context_set_timestamp (context, cinnamon_global_get_current_time (global));
 
   // Make sure that the app is opened on the current workspace even if

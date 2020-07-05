@@ -6,7 +6,6 @@ nobase_dist_js_DATA = \
 	misc/docInfo.js		\
 	misc/fileDialog.js	\
 	misc/fileUtils.js	\
-	misc/format.js		\
 	misc/gnomeSession.js	\
 	misc/gridNavigator.js	\
 	misc/history.js		\
@@ -18,6 +17,7 @@ nobase_dist_js_DATA = \
 	misc/signalManager.js     \
 	misc/timers.js       \
 	misc/util.js		\
+	misc/state.js \
 	misc/windowUtils.js		\
 	perf/core.js		\
     ui/accessibility.js \
@@ -35,7 +35,6 @@ nobase_dist_js_DATA = \
 	ui/checkBox.js		\
 	ui/radioButton.js	\
 	ui/dbusMenu.js		\
-	ui/indicatorManager.js	\
 	ui/desklet.js		\
 	ui/deskletManager.js	\
 	ui/dnd.js		\
@@ -58,13 +57,11 @@ nobase_dist_js_DATA = \
 	ui/messageTray.js	\
 	ui/modalDialog.js	\
 	ui/cinnamonEntry.js	\
-	ui/cinnamonMountOperation.js \
 	ui/osdWindow.js \
 	ui/notificationDaemon.js \
 	ui/overview.js		\
 	ui/overrides.js \
 	ui/panel.js		\
-	ui/panelMenu.js		\
 	ui/placesManager.js  \
 	ui/popupMenu.js		\
 	ui/runDialog.js		\
@@ -75,6 +72,7 @@ nobase_dist_js_DATA = \
 	ui/search.js		\
 	ui/settings.js		\
 	ui/slideshowManager.js  \
+	ui/startupAnimation.js  \
 	ui/systray.js       \
 	ui/cinnamonDBus.js		\
 	ui/statusIconDispatcher.js	\

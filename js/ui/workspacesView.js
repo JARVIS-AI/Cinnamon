@@ -2,7 +2,6 @@
 
 const Clutter = imports.gi.Clutter;
 const Lang = imports.lang;
-const Meta = imports.gi.Meta;
 const Cinnamon = imports.gi.Cinnamon;
 const St = imports.gi.St;
 const Signals = imports.signals;
@@ -11,15 +10,15 @@ const Main = imports.ui.main;
 const Tweener = imports.ui.tweener;
 const Workspace = imports.ui.workspace;
 
-const WORKSPACE_SWITCH_TIME = 0.25;
+var WORKSPACE_SWITCH_TIME = 0.25;
 
-const SwipeScrollDirection = {
+var SwipeScrollDirection = {
     NONE: 0,
     HORIZONTAL: 1,
     VERTICAL: 2
 };
 
-const SwipeScrollResult = {
+var SwipeScrollResult = {
     CANCEL: 0,
     SWIPE: 1,
     CLICK: 2
@@ -59,6 +58,8 @@ WorkspacesView.prototype = {
         this._scrolling = false; // swipe-scrolling
         this._animatingScroll = false; // programatically updating the adjustment
 
+        this._keyIsHandled = true;
+
         let activeWorkspaceIndex = global.screen.get_active_workspace_index();
         this._workspaces = [];
         for (let i = 0; i < global.screen.n_workspaces; i++) {
@@ -72,11 +73,11 @@ WorkspacesView.prototype = {
         // workspaces have been created. This cannot be done first because
         // window movement depends on the Workspaces object being accessible
         // as an Overview member.
-        let overviewShowingId = Main.overview.connect('showing', Lang.bind(this, function() {
+        let overviewShowingId = Main.overview.connect('showing', () => {
             Main.overview.disconnect(overviewShowingId);
-            let activeWorkspaceIndex = global.screen.get_active_workspace_index();
-            this._workspaces[activeWorkspaceIndex].zoomToOverview();
-        }));
+            for(let workspace of this._workspaces)
+                workspace.zoomToOverview();
+        });
 
         this._scrollAdjustment = new St.Adjustment({ value: activeWorkspaceIndex,
                                                      lower: 0,
@@ -104,7 +105,8 @@ WorkspacesView.prototype = {
         };
 
         this._onRestacked();
-        this.actor.connect('key-press-event', Lang.bind(this, this._onStageKeyPress));
+        this.actor.connect('key-press-event', this._onStageKeyPress.bind(this));
+        this.actor.connect('key-release-event', this._onStageKeyRelease.bind(this));
         global.stage.set_key_focus(this.actor);
 
         let primary = Main.layoutManager.primaryMonitor;
@@ -112,17 +114,28 @@ WorkspacesView.prototype = {
     },
 
     _onStageKeyPress: function(actor, event) {
+        let activeWorkspaceIndex = global.screen.get_active_workspace_index();
+        let activeWorkspace = this._workspaces[activeWorkspaceIndex];
+        this._keyIsHandled = activeWorkspace._onKeyPress(actor, event);
+        return this._keyIsHandled;
+    },
+
+    _onStageKeyRelease: function(actor, event) {
+        if (this._keyIsHandled)
+            return false;
+
         let modifiers = Cinnamon.get_event_state(event);
         let symbol = event.get_key_symbol();
 
-        if (symbol == Clutter.Escape)
-        {
-            Main.overview.hide();
-            return true;
+        switch (symbol) {
+            case Clutter.Escape:
+            case Clutter.Super_L:
+            case Clutter.Super_R:
+                Main.overview.hide();
+                return true;
+            default:
+                return false;
         }
-        let activeWorkspaceIndex = global.screen.get_active_workspace_index();
-        let activeWorkspace = this._workspaces[activeWorkspaceIndex];
-        return activeWorkspace._onKeyPress(actor, event);
     },
 
     setGeometry: function(x, y, width, height, spacing) {
@@ -176,7 +189,7 @@ WorkspacesView.prototype = {
     _updateWorkspaceActors: function(showAnimation) {
         let active = global.screen.get_active_workspace_index();
 
-        // Animation is turned off in a multi-manager scenario till we fix 
+        // Animation is turned off in a multi-manager scenario till we fix
         // the animations so that they respect the monitor boundaries.
         this._animating = Main.layoutManager.monitors.length < 2 && showAnimation;
 
@@ -204,7 +217,7 @@ WorkspacesView.prototype = {
                         });
                 }
                 Tweener.addTween(workspace.actor, params);
-            } else {
+            } else if (!workspace.actor.is_finalized()) {
                 workspace.actor.set_position(x, 0);
                 if (w == 0)
                     this._updateVisibility();
@@ -220,7 +233,7 @@ WorkspacesView.prototype = {
             if (this._animating || this._scrolling) {
                 workspace.hideWindowsOverlays();
                 workspace.actor.show();
-            } else {
+            } else if (!workspace.actor.is_finalized()) {
                 workspace.showWindowsOverlays();
                 workspace.actor.visible = (w == active);
             }
@@ -254,7 +267,7 @@ WorkspacesView.prototype = {
     _workspacesChanged: function() {
         let removedCount = 0;
         this._workspaces.slice().forEach(function(workspace, i) {
-            let metaWorkspace = global.screen.get_workspace_by_index(i-removedCount);
+            let metaWorkspace = global.screen.get_workspace_by_index(i - removedCount);
             if (workspace.metaWorkspace != metaWorkspace) {
                 Tweener.removeTweens(workspace.actor);
                 workspace.destroy();
@@ -266,7 +279,7 @@ WorkspacesView.prototype = {
         while (global.screen.n_workspaces > this._workspaces.length) {
             let lastWs = global.screen.get_workspace_by_index(this._workspaces.length);
             let workspace = new Workspace.Workspace(lastWs, this);
-            this._workspaces.push(workspace)
+            this._workspaces.push(workspace);
             this.actor.add_actor(workspace.actor);
         }
         this._animating = false;
@@ -276,6 +289,8 @@ WorkspacesView.prototype = {
     _activeWorkspaceChanged: function(wm, from, to, direction) {
         if (this._scrolling)
             return;
+
+        this._keyIsHandled = true;
 
         this._scrollToActive(true);
     },
@@ -307,22 +322,16 @@ WorkspacesView.prototype = {
     _swipeScrollEnd: function(overview, result) {
         this._scrolling = false;
 
-        if (result == SwipeScrollResult.CLICK) {
-            let [x, y, mod] = global.get_pointer();
-            let actor = global.stage.get_actor_at_pos(Clutter.PickMode.ALL,
-                                                      x, y);
-
-            // Only switch to the workspace when there's no application
-            // windows open. The problem is that it's too easy to miss
-            // an app window and get the wrong one focused.
+        // Close overview on click when there are no windows
+        if (result === SwipeScrollResult.CLICK) {
             let active = global.screen.get_active_workspace_index();
-            if (this._workspaces[active].isEmpty() &&
-                this.actor.contains(actor))
+            if (this._workspaces[active].isEmpty())
                 Main.overview.hide();
+        } else {
+            // Make sure title captions etc are shown as necessary
+            this._updateVisibility();
         }
 
-        // Make sure title captions etc are shown as necessary
-        this._updateVisibility();
     },
 
     _onRestacked: function() {
@@ -334,8 +343,8 @@ WorkspacesView.prototype = {
             stackIndices[stack[i].get_meta_window().get_stable_sequence()] = i;
         }
 
-        for (let i = 0; i < this._workspaces.length; i++)
-            this._workspaces[i].syncStacking(stackIndices);
+        for (let j = 0; j < this._workspaces.length; j++)
+            this._workspaces[j].syncStacking(stackIndices);
     },
 
     // sync the workspaces' positions to the value of the scroll adjustment

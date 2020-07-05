@@ -71,6 +71,7 @@ cinnamon_util_get_file_display_name_if_mount (GFile *file)
       if (!ret && g_file_equal (file, compare))
         ret = g_mount_get_name (mount);
       g_object_unref (mount);
+      g_object_unref (compare);
     }
   g_list_free (mounts);
   g_object_unref (monitor);
@@ -91,6 +92,7 @@ cinnamon_util_get_file_display_for_common_files (GFile *file)
        * nemo */
       return g_strdup (_("Home"));
     }
+  g_object_unref (compare);
 
   compare = g_file_new_for_path ("/");
   if (g_file_equal (file, compare))
@@ -179,6 +181,7 @@ cinnamon_util_get_file_icon_if_mount (GFile *file)
           ret = g_mount_get_icon (mount);
         }
       g_object_unref (mount);
+      g_object_unref (compare);
     }
   g_list_free (mounts);
   g_object_unref (monitor);
@@ -200,17 +203,23 @@ cinnamon_util_get_icon_for_uri_known_folders (const char *uri)
 
   path = g_filename_from_uri (uri, NULL, NULL);
 
-  len = strlen (path);
-  if (path[len] == '/')
-    path[len] = '\0';
+  if (!path)
+    return NULL;
 
   if (strcmp (path, "/") == 0)
     icon = "drive-harddisk";
-  else if (strcmp (path, g_get_home_dir ()) == 0)
-    icon = "user-home";
-  else if (strcmp (path, g_get_user_special_dir (G_USER_DIRECTORY_DESKTOP))
-      == 0)
-    icon = "user-desktop";
+  else {
+    if (g_str_has_suffix (path, "/")) {
+      len = strlen (path);
+      path[len - 1] = '\0';
+    }
+
+    if (strcmp (path, g_get_home_dir ()) == 0)
+      icon = "user-home";
+    else if (strcmp (path, g_get_user_special_dir (G_USER_DIRECTORY_DESKTOP))
+        == 0)
+      icon = "user-desktop";
+  }
 
   g_free (path);
 
@@ -262,7 +271,7 @@ cinnamon_util_get_label_for_uri (const char *text_uri)
         label = cinnamon_util_get_file_description (file);
       if (!label)
         label = cinnamon_util_get_file_display_name (file, TRUE);
-        g_object_unref (file);
+      g_object_unref (file);
 
       return label;
     }
@@ -322,6 +331,7 @@ cinnamon_util_get_icon_for_uri (const char *text_uri)
   GFile *file;
   GFileInfo *info;
   GIcon *retval;
+  const char *custom_icon;
 
   /* Here's what we do:
    *  + check for known file: URI
@@ -350,7 +360,10 @@ cinnamon_util_get_icon_for_uri (const char *text_uri)
 
   retval = cinnamon_util_get_file_icon_if_mount (file);
   if (retval)
-    return retval;
+    {
+      g_object_unref (file);
+      return retval;
+    }
 
   /* gvfs doesn't give us a nice icon for subfolders of the trash, so
    * overriding */
@@ -370,7 +383,7 @@ cinnamon_util_get_icon_for_uri (const char *text_uri)
   if (!info)
     return g_themed_icon_new ("text-x-preview");
 
-  const char *custom_icon = g_file_info_get_attribute_string (info, "metadata::custom-icon");
+  custom_icon = g_file_info_get_attribute_string (info, "metadata::custom-icon");
 
   if (custom_icon)
     {
@@ -462,7 +475,7 @@ cinnamon_util_get_transformed_allocation (ClutterActor    *actor,
    */
   ClutterVertex v[4];
   gfloat x_min, x_max, y_min, y_max;
-  gint i;
+  guint i;
 
   g_return_if_fail (CLUTTER_IS_ACTOR (actor));
 
@@ -490,20 +503,6 @@ cinnamon_util_get_transformed_allocation (ClutterActor    *actor,
   box->y1 = y_min;
   box->x2 = x_max;
   box->y2 = y_max;
-}
-
-char *
-cinnamon_util_normalize_and_casefold (const char *str)
-{
-  char *normalized, *result;
-
-  if (str == NULL)
-    return NULL;
-
-  normalized = g_utf8_normalize (str, -1, G_NORMALIZE_ALL);
-  result = g_utf8_casefold (normalized, -1);
-  g_free (normalized);
-  return result;
 }
 
 /**
@@ -557,16 +556,8 @@ cinnamon_util_format_date (const char *format,
  */
 /* Copied from gtkcalendar.c */
 int
-cinnamon_util_get_week_start ()
+cinnamon_util_get_week_start (void)
 {
-  /* Try to get first weekday from gsettings */
-  /* If the value from gsettings is not in the range 0-6,
-   * continue to get the locale's first weekday */
-  GSettings *settings = g_settings_new (DESKTOP_SCHEMA);
-  int week_start = g_settings_get_int (settings, FIRST_WEEKDAY_KEY);
-  g_object_unref (settings);
-
-  if (0 <= week_start && week_start < 7) return week_start;
 
 #ifdef HAVE__NL_TIME_FIRST_WEEKDAY
   union { unsigned int word; char *string; } langinfo;
@@ -576,6 +567,15 @@ cinnamon_util_get_week_start ()
 #else
   char *gtk_week_start;
 #endif
+
+  /* Try to get first weekday from gsettings */
+  /* If the value from gsettings is not in the range 0-6,
+   * continue to get the locale's first weekday */
+  GSettings *settings = g_settings_new (DESKTOP_SCHEMA);
+  int week_start = g_settings_get_int (settings, FIRST_WEEKDAY_KEY);
+  g_object_unref (settings);
+
+  if (0 <= week_start && week_start < 7) return week_start;
 
 #ifdef HAVE__NL_TIME_FIRST_WEEKDAY
   langinfo.string = nl_langinfo (_NL_TIME_FIRST_WEEKDAY);
@@ -602,8 +602,8 @@ cinnamon_util_get_week_start ()
 
   if (week_start < 0 || week_start > 6)
     {
-      g_warning ("Whoever translated calendar:week_start:0 for GTK+ "
-                 "did so wrongly.\n");
+      g_warning ("calendar:week_start:0 for GTK+ "
+                 "was translated wrongly.\n");
       week_start = 0;
     }
 #endif
@@ -774,20 +774,22 @@ cinnamon_get_file_contents_utf8         (const char                   *path,
                                          CinnamonFileContentsCallback  callback,
                                          gpointer                      user_data)
 {
+  gchar *async_path;
+  GTask *task;
+  CinnamonFileContentsCallbackData *data;
+
   if (path == NULL || callback == NULL)
     {
       g_warning ("cinnamon_get_file_contents_utf8: path and callback cannot be null");
       return;
     }
 
-  CinnamonFileContentsCallbackData *data = g_slice_new (CinnamonFileContentsCallbackData);
+  data = g_slice_new (CinnamonFileContentsCallbackData);
 
   data->callback = callback;
   data->user_data = user_data;
 
-  gchar *async_path = g_strdup (path);
-
-  GTask *task;
+  async_path = g_strdup (path);
 
   task = g_task_new (NULL,
                      NULL,
